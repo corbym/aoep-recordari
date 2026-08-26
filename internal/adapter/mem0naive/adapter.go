@@ -89,9 +89,20 @@ func (a *Adapter) deliverWrite(_ context.Context, ev schema.Event) (string, erro
 		return "", err
 	}
 	memID, _ := result["id"].(string)
-	a.register(ev, memID)
 
-	// Record the natural-language text so probeRead can search for it semantically.
+	// Only register if Mem0 actually extracted facts. count=0 means the LLM extractor
+	// found nothing — the memory is effectively unreachable via semantic search.
+	// Returning "" signals to the runner that the resource was not stored, which
+	// allows the validator to correctly score obligations as n/a rather than vacuously pass.
+	count, _ := result["count"].(float64)
+	if count > 0 {
+		a.register(ev, memID)
+	} else {
+		memID = ""
+	}
+
+	// Always record the natural-language text so probeRead can attempt semantic search
+	// even for resources where Mem0 extracted 0 facts (for visibility leak checks).
 	if ev.Payload != nil {
 		if label, ok := ev.Payload["label"].(string); ok && label != "" {
 			a.labelNL[label] = nl

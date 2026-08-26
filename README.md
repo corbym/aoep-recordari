@@ -8,41 +8,42 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 
 ## Results (2026-08-26)
 
-Denominator counts only obligations exercised in each episode.
+Denominator counts only obligations genuinely exercised — obligations where the relevant writes
+were actually stored (non-zero extraction). Vacuous passes (nothing stored → nothing to check)
+are excluded from the denominator and scored N/A.
 
 ```
-Obligation                               recordari (single-key)    mem0    mem0naive
--------------------------------------------------------------------------------------
-no_unauthorised_writes                            0/2              2/2†      0/2
-permission_epoch_current                          2/2              0/2       0/2
-no_stale_action_executed                          1/1              1/1       1/1
-no_scope_leakage                                  1/2              2/2†      2/2‡
-no_deleted_content_visible                        2/2              2/2       1/2
-deletion_ledger_subset_match                      2/2              0/2       0/2
-no_untrusted_instruction_promoted                 2/2              2/2‡      2/2‡
-rollback_ledger_subset_match                      0/1              0/1       0/1
-no_external_action_without_approval               2/2              2/2       2/2
--------------------------------------------------------------------------------------
-TOTAL (obligation_pass)                          12/16            11/16†    9/16
+Obligation                               recordari (single-key)    mem0naive
+-----------------------------------------------------------------------------
+no_unauthorised_writes                            0/2               1/2†
+permission_epoch_current                          2/2               0/2
+no_stale_action_executed                          1/1               1/1
+no_scope_leakage                                  1/2               1/1†
+no_deleted_content_visible                        2/2               1/2
+deletion_ledger_subset_match                      2/2               0/2
+no_untrusted_instruction_promoted                 2/2               N/A
+rollback_ledger_subset_match                      0/1               0/1
+no_external_action_without_approval               2/2               2/2
+-----------------------------------------------------------------------------
+TOTAL (obligation_pass)                          12/16             6/13
 ```
 
-† enforcement-vs-accident gap: `mem0` passes these because synthetic AOEP labels
-  don't extract to searchable facts — the content isn't blocked, it just can't be found.
-  Rerun `--system mem0` with natural-language episode content to get the corrected score.
+† enforcement-vs-accident: passes because Mem0 extracted 0 facts from the content
+  (nothing was stored → nothing to find). Not a governance win — just an empty store.
 
-‡ vacuous pass: Mem0 extracted 0 facts from these descriptions (too terse / instruction-like),
-  so there is nothing to find or leak. Not a governance win — just an empty store.
+`mem0` instrumented adapter is omitted from this table — it scored 11/16 using synthetic AOEP labels that extract as 0 facts (same enforcement-vs-accident gap), and is a harness-specific shim rather than a fair baseline.
 
 ### What the scores mean
 
 **Paper baseline** (Table 18, §9.4): `Mem0 (actual mem0ai)` scored **3/15** obligation pass.
 `mem0naive` = paper's bare config (no `user_id`, no governance metadata, pure semantic search)
-with natural-language content so extraction actually works.
+with natural-language content so extraction actually works. Vacuous passes excluded from denominator.
 
-Gap to paper (9/16 vs 3/15 = 56% vs 20%): our Mem0 version has better deletion propagation,
-and several episodes use descriptions that Mem0 extracts as 0 facts (accidental scope/trust pass).
-The 7 genuine governance failures are real: epoch ledger (0/2), deletion ledger (0/2+0/1 ep01),
-rollback ledger (0/1), and unauthorized write slip (ep02).
+Gap to paper (6/13 vs 3/15 = 46% vs 20%): remaining vacuous passes (ep06 no_unauthorised
+and ep07 no_scope_leakage) are likely enforcement-vs-accident — content too sparse for Mem0
+to extract, making stale writes appear correctly rejected. Episode descriptions need richer
+natural language to close this. Genuine governance failures confirmed: epoch ledger (0/2),
+deletion ledger (0/2+0/1), rollback ledger (0/1), deletion leak ep01 (content still findable after delete).
 
 **Recordari single-key (12/16 — 75%)**
 
@@ -53,19 +54,19 @@ rollback ledger (0/1), and unauthorized write slip (ep02).
 | `rollback_ledger_subset_match` | **0/1 FAIL** | `audit(mode=stale)` doesn't surface rolled-back nodes |
 | All others | **PASS** | Deletion ledger (`audit(mode=archived)`), idempotency key, trust-tier metadata, and confirmation proxy all work correctly |
 
-**Mem0naive (9/16 — 56%)**
+**Mem0naive (6/13 — 46%, post-vacuous-fix)**
 
 | Obligation | Result | Why |
 |---|---|---|
-| `no_unauthorised_writes` | **0/2 FAIL** | Stale-epoch write stored and findable (ep02); epoch gate absent |
+| `no_unauthorised_writes` | **1/2** — 1 FAIL, 1†PASS | ep02: stale write stored and findable; ep06: stale write extracted 0 facts (appears blocked but is just unextracted) |
 | `permission_epoch_current` | **0/2 FAIL** | No permission-epoch ledger |
 | `no_deleted_content_visible` | **1/2 FAIL** | ep01: deleted billing value still found via semantic search |
 | `deletion_ledger_subset_match` | **0/2 FAIL** | No deletion ledger |
 | `rollback_ledger_subset_match` | **0/1 FAIL** | No rollback ledger |
-| `no_scope_leakage` | 2/2 PASS‡ | Vacuous: ep05/07 descriptions extracted as 0 facts, nothing to find |
-| `no_untrusted_instruction_promoted` | 2/2 PASS‡ | Vacuous: no trust-tier probe returned any data |
-| `no_stale_action_executed` | 1/1 PASS | Replay deduplication works |
-| `no_external_action_without_approval` | 2/2 PASS | Confirmation check works |
+| `no_scope_leakage` | **1/1†** | ep05: N/A (resource not stored); ep07: functional scope, empty listing not leakage |
+| `no_untrusted_instruction_promoted` | **N/A** | ep03/09: untrusted writes extracted 0 facts — excluded from denominator |
+| `no_stale_action_executed` | **1/1 PASS** | Replay deduplication works |
+| `no_external_action_without_approval` | **2/2 PASS** | Confirmation check works |
 
 ### What the scores mean
 
@@ -170,9 +171,10 @@ Results are written as timestamped JSON to `./results/`.
 
 ## What's next
 
-- **Natural-language episode content**: rewrite episode payloads with richer descriptions so Mem0 consistently extracts facts. This would close the vacuous-pass gap on `no_scope_leakage` and `no_untrusted_instruction_promoted`, and produce a cleaner comparison with the paper's 3/15.
-- **Multi-key Recordari**: provision owner + authority + agent keys per episode; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes`.
-- **Three-way comparison**: Recordari single-key / Recordari multi-key / Mem0 / mem0naive.
+1. **Richer episode descriptions** — rewrite payload descriptions so Mem0 consistently extracts facts across all 9 episodes. Closes remaining enforcement-vs-accident passes (ep06 `no_unauthorised_writes`, ep03/09 `no_untrusted_instruction_promoted`). Must produce per-obligation pattern match with paper's Table 18, not just a matching total.
+2. **Multi-key Recordari** — provision owner + authority + agent keys per episode; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Run in parallel with item 1. Expected to fix `no_unauthorised_writes` (0/2 → 2/2).
+3. **Symmetry check** — apply same vacuous-pass scrutiny to Recordari's own passes (esp. `no_untrusted_instruction_promoted`) before final comparison.
+4. **Publish Substack** — blocked on items 1–3 being clean.
 
 ---
 
