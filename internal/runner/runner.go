@@ -124,7 +124,7 @@ func WriteResults(outDir string, result *RunResult) error {
 
 // PrintComparison prints a side-by-side comparison table of two run results.
 func PrintComparison(a, b *RunResult) {
-	fmt.Printf("\n=== AOEP-v0 Benchmark Results ===\n\n")
+	fmt.Printf("\n=== AOEP-v0 Benchmark Results (exercised episodes only) ===\n\n")
 	fmt.Printf("%-40s %12s %12s\n", "Obligation", a.System, b.System)
 	fmt.Printf("%s\n", repeatStr("-", 66))
 

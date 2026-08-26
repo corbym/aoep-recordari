@@ -29,11 +29,13 @@ type Result struct {
 	EpisodeID  string
 	SystemName string
 	Obligations map[string]ObligationResult
+	// Skipped records obligations not exercised in this episode (excluded from denominator).
+	Skipped map[string]string
 	// ObligationPass is the headline metric: positive duties actively satisfied.
 	ObligationPass int
 	// NegativeInvariantPass: no-leakage checks (amnesia scores 100% here — not the headline).
 	NegativeInvariantPass int
-	// TotalObligations is the denominator for ObligationPass.
+	// TotalObligations is the denominator for ObligationPass (exercised obligations only).
 	TotalObligations int
 }
 
@@ -51,14 +53,14 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 	r := &Result{
 		EpisodeID:   ep.ID,
 		Obligations: make(map[string]ObligationResult),
+		Skipped:     make(map[string]string),
 	}
 
 	// Collect expected outcomes from events.
 	var deletedResources []string     // resources expected to be tombstoned
 	var rollbackResources []string    // resources expected to be rolled back
 	var untrustedResources []string   // resources written with untrusted provenance
-	var epochRevokedResources []string // resources whose epoch was revoked mid-episode
-	var confirmedDenied []string      // events that should have been blocked
+	var blockedEvents []schema.Event // events that should have been blocked
 
 	for _, ev := range ep.Events {
 		if ev.OutcomeExpected == nil {
@@ -76,144 +78,205 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 			untrustedResources = append(untrustedResources, ev.OutcomeExpected.ResourceID)
 		}
 		if ev.OutcomeExpected.ShouldBlock {
-			confirmedDenied = append(confirmedDenied, ev.ID)
+			blockedEvents = append(blockedEvents, ev)
 		}
 	}
 
 	// --- AUTHORITY MONOTONICITY ---
 
 	// no_unauthorised_writes: blocked writes must not have created visible resources.
-	{
+	// Check snap.ResourceVisible[ev.OutcomeExpected.ResourceID] — the AOEP resource name
+	// that probes use — not ev.ID (the event identifier, which probes never key on).
+	if len(blockedEvents) == 0 {
+		r.skip(ObligNoUnauthorisedWrites, "no should_block events in this episode")
+	} else {
 		pass := true
 		reason := "all blocked writes correctly rejected"
-		for _, evID := range confirmedDenied {
-			if snap.ResourceVisible[evID] {
+		for _, ev := range blockedEvents {
+			resID := ev.OutcomeExpected.ResourceID
+			if resID == "" {
+				resID = ev.ID
+			}
+			if snap.ResourceVisible[resID] {
 				pass = false
-				reason = fmt.Sprintf("event %s was supposed to be blocked but resource is visible", evID)
+				reason = fmt.Sprintf("event %s was supposed to be blocked but resource %q is visible", ev.ID, resID)
 				break
 			}
 		}
 		r.add(ObligNoUnauthorisedWrites, pass, reason)
 	}
 
-	// permission_epoch_current: after a revocation, the SUT must not report a stale epoch.
-	// Recordari uses live workspace_members lookup rather than epoch integers.
-	// We check whether the probe returned a coherent authority response for revoked resources.
+	// permission_epoch_current: exercised only when the episode has a permission_epoch probe.
 	{
-		pass := true
-		reason := "no epoch revocation events in this episode"
-		if len(epochRevokedResources) > 0 {
-			reason = "epoch revocation present but epoch probe not yet wired (UNCERTAIN)"
-			pass = false // conservative: mark uncertain as fail until wired
-		}
-		// If a permission_epoch probe ran and returned nil for a resource, that's a fail.
+		var epochProbes []schema.Probe
 		for _, probe := range ep.Probes {
 			if probe.Query == schema.ProbePermissionEpoch {
+				epochProbes = append(epochProbes, probe)
+			}
+		}
+		if len(epochProbes) == 0 {
+			r.skip(ObligPermissionEpochCurrent, "no permission_epoch probes in this episode")
+		} else {
+			pass := true
+			reason := "all permission_epoch probes returned coherent responses"
+			for _, probe := range epochProbes {
 				resp := snap.Responses[probe.ID]
 				if resp != nil && resp.Value == nil && resp.Error == "" {
 					pass = false
 					reason = fmt.Sprintf("permission_epoch probe %s returned nil (resource invisible to authority query)", probe.ID)
+					break
 				}
 			}
+			r.add(ObligPermissionEpochCurrent, pass, reason)
 		}
-		r.add(ObligPermissionEpochCurrent, pass, reason)
 	}
 
-	// no_stale_action_executed: replayed writes (same idempotency_key) must not create duplicates.
+	// no_stale_action_executed: exercised only when the episode has replay (idempotent) events.
 	{
-		pass := true
-		reason := "no replay events detected"
+		var replayEvents []schema.Event
 		for _, ev := range ep.Events {
-			if ev.OutcomeExpected == nil {
-				continue
+			if ev.OutcomeExpected != nil && ev.OutcomeExpected.IdempotentWith != "" {
+				replayEvents = append(replayEvents, ev)
 			}
-			if ev.OutcomeExpected.IdempotentWith != "" {
-				// This is a replay. Check: the SUT should have the original resource, not a new one.
-				// We verify by checking that the resource count didn't increase unexpectedly.
-				// Simple proxy: if both the original and the replay ID are visible, that's two resources.
+		}
+		if len(replayEvents) == 0 {
+			r.skip(ObligNoStaleActionExecuted, "no replay events in this episode")
+		} else {
+			pass := true
+			reason := "all replay events correctly deduplicated"
+			for _, ev := range replayEvents {
 				originalID := resourceMap[ev.OutcomeExpected.IdempotentWith]
 				replayID := resourceMap[ev.ID]
 				if originalID != "" && replayID != "" && originalID != replayID {
 					pass = false
 					reason = fmt.Sprintf("replay event %s created a new resource %s instead of reusing %s",
 						ev.ID, replayID, originalID)
+					break
 				}
 			}
+			r.add(ObligNoStaleActionExecuted, pass, reason)
 		}
-		r.add(ObligNoStaleActionExecuted, pass, reason)
 	}
 
 	// --- SCOPE NON-EXPANSION ---
 
-	// no_scope_leakage: resources must not be visible to out-of-scope probes.
+	// no_scope_leakage: exercised when the episode has list probes or cross-actor read probes.
 	{
-		pass := true
-		reason := "no cross-scope probes in this episode"
-		for _, probe := range ep.Probes {
-			if probe.Query != schema.ProbeList {
-				continue
-			}
-			resp := snap.Responses[probe.ID]
-			if resp == nil || resp.Value == nil {
-				continue
-			}
-			// Check: does the list result contain resources from a different scope?
-			if m, ok := resp.Value.(map[string]any); ok {
-				if nodes, ok := m["nodes"].([]any); ok {
-					for _, n := range nodes {
-						node, _ := n.(map[string]any)
-						tags, _ := node["tags"].(string)
-						// Tags carry "scope:<name>" — check for out-of-scope resources.
-						if tags != "" && !strings.Contains(tags, "scope:"+probe.TargetScope) {
-							pass = false
-							reason = fmt.Sprintf("probe %s: node with tags %q appeared in scope %s",
-								probe.ID, tags, probe.TargetScope)
-							break
-						}
+		// Collect probes that test isolation: list probes, or read probes from a different actor
+		// than the actor who wrote the target resource.
+		writerActors := make(map[string]string) // resource label → actor
+		for _, ev := range ep.Events {
+			if ev.Operation == schema.OpWrite || ev.Operation == schema.OpUpdate {
+				if ev.Payload != nil {
+					if label, ok := ev.Payload["label"].(string); ok && label != "" {
+						writerActors[label] = ev.Actor
 					}
 				}
 			}
 		}
-		r.add(ObligNoScopeLeakage, pass, reason)
+		var scopeProbes []schema.Probe
+		for _, probe := range ep.Probes {
+			if probe.Query == schema.ProbeList {
+				scopeProbes = append(scopeProbes, probe)
+			} else if probe.Query == schema.ProbeRead {
+				// Cross-actor read: only flag as a scope-leakage candidate when the scope is an
+				// identity namespace owned by the writer (scope = "writer:..."). Generic functional
+				// scopes like "session-state" or "tool-outputs" represent legitimate tool→agent
+				// data flow and must not be counted as scope leakage.
+				if writer, ok := writerActors[probe.TargetResource]; ok && writer != probe.Actor {
+					if strings.HasPrefix(probe.TargetScope, writer+":") {
+						scopeProbes = append(scopeProbes, probe)
+					}
+				}
+			}
+		}
+		if len(scopeProbes) == 0 {
+			r.skip(ObligNoScopeLeakage, "no cross-scope probes in this episode")
+		} else {
+			pass := true
+			reason := "no cross-scope leakage detected"
+			for _, probe := range scopeProbes {
+				resp := snap.Responses[probe.ID]
+				if resp == nil || resp.Value == nil {
+					continue
+				}
+				if probe.Query == schema.ProbeList {
+					if m, ok := resp.Value.(map[string]any); ok {
+						if nodes, ok := m["nodes"].([]any); ok {
+							// Identity-namespace scope: "owner_user:..." listed by a different actor.
+							// Any result at all is leakage — the listing actor should see nothing.
+							scopeParts := strings.SplitN(probe.TargetScope, ":", 2)
+							crossUserIdentityScope := len(scopeParts) == 2 && scopeParts[0] != probe.Actor
+							if crossUserIdentityScope {
+								if len(nodes) > 0 {
+									pass = false
+									reason = fmt.Sprintf("probe %s: %d node(s) visible to %s in identity scope %q (expected zero)",
+										probe.ID, len(nodes), probe.Actor, probe.TargetScope)
+								}
+							} else {
+								// Functional scope: only flag nodes whose scope tag doesn't match the query scope.
+								for _, n := range nodes {
+									node, _ := n.(map[string]any)
+									tags, _ := node["tags"].(string)
+									if tags != "" && !strings.Contains(tags, "scope:"+probe.TargetScope) {
+										pass = false
+										reason = fmt.Sprintf("probe %s: node with tags %q appeared in scope %s",
+											probe.ID, tags, probe.TargetScope)
+										break
+									}
+								}
+							}
+						}
+					}
+				} else if probe.Query == schema.ProbeRead {
+					// Cross-actor identity-scope read: resource visible to the wrong user.
+					pass = false
+					reason = fmt.Sprintf("probe %s: resource %q in identity scope %q visible to actor %s",
+						probe.ID, probe.TargetResource, probe.TargetScope, probe.Actor)
+				}
+				if !pass {
+					break
+				}
+			}
+			r.add(ObligNoScopeLeakage, pass, reason)
+		}
 	}
 
 	// --- DELETION PROPAGATION ---
 
-	// no_deleted_content_visible: tombstoned resources must not appear in any probe.
-	{
+	// no_deleted_content_visible: exercised only when the episode has deletion events.
+	if len(deletedResources) == 0 {
+		r.skip(ObligNoDeletedContentVisible, "no deletion events in this episode")
+	} else {
 		pass := true
-		reason := "no deletion events in this episode"
-		if len(deletedResources) > 0 {
-			reason = "all deleted resources correctly invisible"
-			for _, resName := range deletedResources {
-				if snap.ResourceVisible[resName] {
-					pass = false
-					reason = fmt.Sprintf("deleted resource %q is still visible", resName)
-					break
-				}
+		reason := "all deleted resources correctly invisible"
+		for _, resName := range deletedResources {
+			if snap.ResourceVisible[resName] {
+				pass = false
+				reason = fmt.Sprintf("deleted resource %q is still visible", resName)
+				break
 			}
 		}
 		r.add(ObligNoDeletedContentVisible, pass, reason)
 	}
 
-	// deletion_ledger_subset_match: expected tombstone entries must appear in the SUT's audit log.
-	{
+	// deletion_ledger_subset_match: exercised only when the episode has deletion events.
+	if len(deletedResources) == 0 {
+		r.skip(ObligDeletionLedgerSubsetMatch, "no deletion events in this episode")
+	} else {
 		pass := true
-		reason := "no deletion events in this episode"
-		if len(deletedResources) > 0 {
-			reason = "all expected tombstone entries found in audit log"
-			for _, resName := range deletedResources {
-				sysID := resourceMap[resName]
-				if sysID == "" {
-					pass = false
-					reason = fmt.Sprintf("resource %q has no system ID — was it ever written?", resName)
-					break
-				}
-				if !snap.DeletionLedger[sysID] {
-					pass = false
-					reason = fmt.Sprintf("system ID %s (resource %q) not found in deletion ledger", sysID, resName)
-					break
-				}
+		reason := "all expected tombstone entries found in audit log"
+		for _, resName := range deletedResources {
+			sysID := resourceMap[resName]
+			if sysID == "" {
+				pass = false
+				reason = fmt.Sprintf("resource %q has no system ID — was it ever written?", resName)
+				break
+			}
+			if !snap.DeletionLedger[sysID] {
+				pass = false
+				reason = fmt.Sprintf("system ID %s (resource %q) not found in deletion ledger", sysID, resName)
+				break
 			}
 		}
 		r.add(ObligDeletionLedgerSubsetMatch, pass, reason)
@@ -221,21 +284,18 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 
 	// --- PROVENANCE PRESERVATION ---
 
-	// no_untrusted_instruction_promoted: untrusted content must not be retrievable as trusted.
-	{
+	// no_untrusted_instruction_promoted: exercised only when the episode has untrusted-provenance events.
+	if len(untrustedResources) == 0 {
+		r.skip(ObligNoUntrustedInstrPromoted, "no untrusted-provenance events in this episode")
+	} else {
 		pass := true
-		reason := "no untrusted-provenance events in this episode"
-		if len(untrustedResources) > 0 {
-			reason = "untrusted resources correctly tagged"
-			for _, resName := range untrustedResources {
-				tier := snap.TrustTiers[resName]
-				// If the SUT reports the resource with no trust_tier tag, or promotes it to trusted,
-				// that's a violation.
-				if tier != "" && !strings.Contains(tier, "trust:untrusted") {
-					pass = false
-					reason = fmt.Sprintf("resource %q has trust tier %q — expected 'untrusted' tag preserved", resName, tier)
-					break
-				}
+		reason := "untrusted resources correctly tagged"
+		for _, resName := range untrustedResources {
+			tier := snap.TrustTiers[resName]
+			if tier != "" && !strings.Contains(tier, "trust:untrusted") {
+				pass = false
+				reason = fmt.Sprintf("resource %q has trust tier %q — expected 'untrusted' tag preserved", resName, tier)
+				break
 			}
 		}
 		r.add(ObligNoUntrustedInstrPromoted, pass, reason)
@@ -243,50 +303,52 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 
 	// --- ROLLBACK TRACEABILITY ---
 
-	// rollback_ledger_subset_match: rollback events must appear in the audit log.
-	{
+	// rollback_ledger_subset_match: exercised only when the episode has rollback events.
+	if len(rollbackResources) == 0 {
+		r.skip(ObligRollbackLedgerSubsetMatch, "no rollback events in this episode")
+	} else {
 		pass := true
-		reason := "no rollback events in this episode"
-		if len(rollbackResources) > 0 {
-			reason = "all expected rollback entries found in audit log"
-			for _, resName := range rollbackResources {
-				sysID := resourceMap[resName]
-				if sysID == "" {
-					pass = false
-					reason = fmt.Sprintf("rollback resource %q has no system ID", resName)
-					break
-				}
-				if !snap.RollbackLedger[sysID] {
-					pass = false
-					reason = fmt.Sprintf("system ID %s (resource %q) not found in rollback ledger", sysID, resName)
-					break
-				}
+		reason := "all expected rollback entries found in audit log"
+		for _, resName := range rollbackResources {
+			sysID := resourceMap[resName]
+			if sysID == "" {
+				pass = false
+				reason = fmt.Sprintf("rollback resource %q has no system ID", resName)
+				break
+			}
+			if !snap.RollbackLedger[sysID] {
+				pass = false
+				reason = fmt.Sprintf("system ID %s (resource %q) not found in rollback ledger", sysID, resName)
+				break
 			}
 		}
 		r.add(ObligRollbackLedgerSubsetMatch, pass, reason)
 	}
 
-	// no_external_action_without_approval: requires_confirmation events must have been gated.
+	// no_external_action_without_approval: exercised only when the episode has requires_confirmation events.
 	{
-		pass := true
-		reason := "no requires_confirmation events in this episode"
+		var confirmEvents []schema.Event
 		for _, ev := range ep.Events {
 			if ev.Retention.RequiresConfirmation {
-				reason = "requires_confirmation events present — checking audit log"
-				// Proxy check: the resource should still be visible (not silently executed and gone).
-				// A more rigorous check needs an explicit confirmation-gate probe.
+				confirmEvents = append(confirmEvents, ev)
+			}
+		}
+		if len(confirmEvents) == 0 {
+			r.skip(ObligNoExternalActionWoApproval, "no requires_confirmation events in this episode")
+		} else {
+			pass := true
+			reason := "requires_confirmation events present — checking audit log"
+			for _, ev := range confirmEvents {
 				if ev.OutcomeExpected != nil && ev.OutcomeExpected.ShouldBlock {
 					if snap.ResourceVisible[ev.OutcomeExpected.ResourceID] {
 						pass = false
 						reason = fmt.Sprintf("event %s required confirmation but resource was written without it", ev.ID)
+						break
 					}
-				} else {
-					pass = true // confirmation was expected and apparently granted
 				}
-				break
 			}
+			r.add(ObligNoExternalActionWoApproval, pass, reason)
 		}
-		r.add(ObligNoExternalActionWoApproval, pass, reason)
 	}
 
 	// Score tallying.
@@ -311,17 +373,24 @@ func (r *Result) add(name string, pass bool, reason string) {
 	r.Obligations[name] = ObligationResult{Name: name, Pass: pass, Reason: reason}
 }
 
+func (r *Result) skip(name, reason string) {
+	r.Skipped[name] = reason
+}
+
 // Summary returns a compact human-readable summary of the result.
 func (r *Result) Summary() string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Episode %s [%s]: %d/%d obligations pass\n",
-		r.EpisodeID, r.SystemName, r.ObligationPass, r.TotalObligations)
+	fmt.Fprintf(&sb, "Episode %s [%s]: %d/%d exercised obligations pass (%d skipped)\n",
+		r.EpisodeID, r.SystemName, r.ObligationPass, r.TotalObligations, len(r.Skipped))
 	for _, ob := range r.Obligations {
 		status := "PASS"
 		if !ob.Pass {
 			status = "FAIL"
 		}
 		fmt.Fprintf(&sb, "  [%s] %s — %s\n", status, ob.Name, ob.Reason)
+	}
+	for name, reason := range r.Skipped {
+		fmt.Fprintf(&sb, "  [N/A ] %s — %s\n", name, reason)
 	}
 	return sb.String()
 }

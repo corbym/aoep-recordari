@@ -4,3 +4,6 @@ results/*.csv
 *.exe
 *.test
 vendor/
+__pycache__/
+*.pyc
+mem0_server/chroma_data/

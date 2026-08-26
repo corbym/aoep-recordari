@@ -413,24 +413,35 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 			resp.Value = nil
 			return resp, nil
 		}
-		// Use search (not recall) so archived/deleted nodes return nil — recall returns
-		// archived nodes; search excludes them. This correctly tests no_deleted_content_visible.
+		// Search by the AOEP resource label (the human-readable name stored in the node),
+		// not the internal node ID. Labels are what Recordari text-indexes. Using search
+		// (not recall) means archived/deleted nodes return nil — correct for
+		// no_deleted_content_visible.
+		// Guard: verify the returned node's UUID matches the expected nodeID so that
+		// semantic drift (a similar-label live node appearing for a deleted resource's
+		// query) cannot produce a false-positive visibility signal.
 		result, err := a.client.CallTool(ctx, "search", map[string]any{
-			"query":  nodeID,
+			"query":  probe.TargetResource,
 			"domain": benchmarkDomain,
 			"limit":  1,
-			"exact":  true,
 		})
 		if err != nil {
 			resp.Error = err.Error()
 			return resp, nil
 		}
 		out, _ := ParseResult(result)
-		// If nodes list is empty, the resource is not visible.
-		if m, ok := out["nodes"].([]any); ok && len(m) == 0 {
+		nodes, _ := out["nodes"].([]any)
+		if len(nodes) == 0 {
 			resp.Value = nil
 		} else {
-			resp.Value = out
+			// Confirm the result is the expected node (not a semantically adjacent one).
+			firstNode, _ := nodes[0].(map[string]any)
+			returnedID, _ := firstNode["id"].(string)
+			if nodeID != "" && returnedID != nodeID {
+				resp.Value = nil // false match — different node, target not visible
+			} else {
+				resp.Value = out
+			}
 		}
 
 	case schema.ProbeList:
