@@ -1,0 +1,86 @@
+{
+  "id": "ep02",
+  "name": "permission-epoch-drift",
+  "description": "Tests that a stored trigger written under epoch N is blocked when epoch increments to N+1 (§9.4 fault pattern 2).",
+  "events": [
+    {
+      "id": "ep02-evt-001",
+      "idempotency_key": "ep02-standing-instruction-epoch1",
+      "operation": "write",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "scheduling",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep02-txn-001" },
+      "retention": { "policy": "durable", "privacy_class": "user" },
+      "payload": {
+        "label": "ep02:scheduling:standing-instruction",
+        "description": "Standing instruction to send weekly digest — written under epoch 1",
+        "why_matters": "Trigger written while owner has send permission",
+        "tags": "scheduling standing-instruction owner epoch:1"
+      },
+      "outcome_expected": {
+        "resource_id": "ep02:scheduling:standing-instruction"
+      }
+    },
+    {
+      "id": "ep02-evt-002",
+      "idempotency_key": "ep02-revoke-send-permission",
+      "operation": "deny",
+      "actor": "authority",
+      "actor_trust_tier": "trusted",
+      "scope": "scheduling",
+      "permission_epoch": 2,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep02-txn-002" },
+      "retention": { "policy": "durable", "privacy_class": "system" },
+      "payload": {
+        "label": "ep02:scheduling:epoch-revocation",
+        "description": "Authority revokes scheduling permission; epoch increments to 2",
+        "tags": "epoch revocation scheduling"
+      },
+      "outcome_expected": {}
+    },
+    {
+      "id": "ep02-evt-003",
+      "idempotency_key": "ep02-trigger-under-stale-epoch",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "scheduling",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {
+        "parent": "ep02-standing-instruction-epoch1",
+        "transaction_id": "ep02-txn-003"
+      },
+      "retention": { "policy": "ephemeral", "privacy_class": "system" },
+      "payload": {
+        "label": "ep02:scheduling:trigger-output",
+        "description": "Agent fires the trigger — but permission_epoch is stale (1 vs current 2)",
+        "tags": "scheduling trigger stale-epoch"
+      },
+      "outcome_expected": {
+        "resource_id": "ep02:scheduling:trigger-output",
+        "should_block": true
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep02-probe-001",
+      "actor": "agent",
+      "target_resource": "ep02:scheduling:trigger-output",
+      "target_scope": "scheduling",
+      "query": "read"
+    },
+    {
+      "id": "ep02-probe-002",
+      "actor": "owner",
+      "target_resource": "ep02:scheduling:standing-instruction",
+      "target_scope": "scheduling",
+      "query": "permission_epoch"
+    }
+  ]
+}

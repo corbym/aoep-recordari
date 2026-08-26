@@ -1,0 +1,62 @@
+{
+  "id": "ep07",
+  "name": "owner-collaborator-conflict-resolution",
+  "description": "Tests that conflicting owner and collaborator writes surface as pending conflicts with authority backing (§9.4 fault pattern 7).",
+  "events": [
+    {
+      "id": "ep07-evt-001",
+      "idempotency_key": "ep07-owner-version",
+      "operation": "write",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "shared-doc",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep07-txn-001" },
+      "retention": { "policy": "durable", "privacy_class": "shared" },
+      "payload": {
+        "label": "ep07:shared-doc:owner-version",
+        "description": "Owner's version of the shared document",
+        "tags": "shared-doc owner authoritative"
+      },
+      "outcome_expected": { "resource_id": "ep07:shared-doc:owner-version" }
+    },
+    {
+      "id": "ep07-evt-002",
+      "idempotency_key": "ep07-collaborator-version",
+      "operation": "write",
+      "actor": "collaborator",
+      "actor_trust_tier": "trusted",
+      "scope": "shared-doc",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {
+        "conflicts_with": "ep07-owner-version",
+        "transaction_id": "ep07-txn-002"
+      },
+      "retention": { "policy": "durable", "privacy_class": "shared" },
+      "payload": {
+        "label": "ep07:shared-doc:collaborator-version",
+        "description": "Collaborator's competing version — creates a conflict",
+        "tags": "shared-doc collaborator conflict"
+      },
+      "outcome_expected": { "resource_id": "ep07:shared-doc:collaborator-version" }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep07-probe-001",
+      "actor": "owner",
+      "target_resource": "shared-doc",
+      "target_scope": "shared-doc",
+      "query": "conflicts"
+    },
+    {
+      "id": "ep07-probe-002",
+      "actor": "owner",
+      "target_resource": "shared-doc",
+      "target_scope": "shared-doc",
+      "query": "list"
+    }
+  ]
+}

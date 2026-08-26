@@ -1,0 +1,135 @@
+{
+  "id": "ep01",
+  "name": "restart-conflict-deletion",
+  "description": "Tests idempotency on restart replay, conflict surfacing, and deletion ledger propagation (§9.4 fault pattern 1).",
+  "events": [
+    {
+      "id": "ep01-evt-001",
+      "idempotency_key": "ep01-billing-owner-write-1",
+      "operation": "write",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "billing",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep01-txn-001" },
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "user",
+        "requires_confirmation": true
+      },
+      "payload": {
+        "label": "ep01:billing:owner:value",
+        "description": "Billing value written by owner",
+        "why_matters": "Durable billing fact under epoch 1",
+        "tags": "billing owner",
+        "value": "USD_100"
+      },
+      "outcome_expected": {
+        "resource_id": "ep01:billing:owner:value"
+      }
+    },
+    {
+      "id": "ep01-evt-002",
+      "idempotency_key": "ep01-billing-owner-write-1",
+      "operation": "write",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "billing",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep01-txn-001" },
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "user",
+        "requires_confirmation": true
+      },
+      "payload": {
+        "label": "ep01:billing:owner:value",
+        "description": "Billing value written by owner (restart replay — same idempotency_key)",
+        "why_matters": "Replay after simulated restart",
+        "tags": "billing owner",
+        "value": "USD_100"
+      },
+      "outcome_expected": {
+        "resource_id": "ep01:billing:owner:value",
+        "idempotent_with": "ep01-evt-001"
+      }
+    },
+    {
+      "id": "ep01-evt-003",
+      "idempotency_key": "ep01-billing-collaborator-conflict",
+      "operation": "write",
+      "actor": "collaborator",
+      "actor_trust_tier": "trusted",
+      "scope": "billing",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {
+        "conflicts_with": "ep01-billing-owner-write-1",
+        "transaction_id": "ep01-txn-002"
+      },
+      "retention": { "policy": "durable", "privacy_class": "shared" },
+      "payload": {
+        "label": "ep01:billing:collaborator:value",
+        "description": "Conflicting billing value proposed by collaborator",
+        "why_matters": "Conflict entry — authority backed by owner vs collaborator",
+        "tags": "billing collaborator conflict",
+        "value": "USD_200"
+      },
+      "outcome_expected": {
+        "resource_id": "ep01:billing:collaborator:value"
+      }
+    },
+    {
+      "id": "ep01-evt-004",
+      "idempotency_key": "ep01-billing-owner-delete",
+      "operation": "tombstone",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "billing",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {
+        "parent": "ep01-billing-owner-write-1",
+        "transaction_id": "ep01-txn-003"
+      },
+      "retention": { "policy": "durable", "privacy_class": "user" },
+      "payload": {
+        "target_id": "ep01:billing:owner:value"
+      },
+      "outcome_expected": {
+        "resource_id": "ep01:billing:owner:value",
+        "ledger_entry": {
+          "resource_id": "ep01:billing:owner:value",
+          "scope": "billing",
+          "actor": "owner",
+          "perm_epoch_at_op": 1
+        }
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep01-probe-001",
+      "actor": "owner",
+      "target_resource": "ep01:billing:owner:value",
+      "target_scope": "billing",
+      "query": "read"
+    },
+    {
+      "id": "ep01-probe-002",
+      "actor": "owner",
+      "target_resource": "billing",
+      "target_scope": "billing",
+      "query": "deletion_ledger"
+    },
+    {
+      "id": "ep01-probe-003",
+      "actor": "owner",
+      "target_resource": "billing",
+      "target_scope": "billing",
+      "query": "conflicts"
+    }
+  ]
+}

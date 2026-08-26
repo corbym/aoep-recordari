@@ -1,0 +1,62 @@
+{
+  "id": "ep08",
+  "name": "rollback-external-action",
+  "description": "Tests that a rolled-back action is logged in the rollback ledger and that the pre-rollback state is restored (§9.4 fault pattern 8).",
+  "events": [
+    {
+      "id": "ep08-evt-001",
+      "idempotency_key": "ep08-action-record",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "actions",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep08-txn-001" },
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "system",
+        "requires_confirmation": true
+      },
+      "payload": {
+        "label": "ep08:actions:external-action",
+        "description": "External action record — requires confirmation before execution",
+        "tags": "actions agent external requires-confirmation"
+      },
+      "outcome_expected": { "resource_id": "ep08:actions:external-action" }
+    },
+    {
+      "id": "ep08-evt-002",
+      "idempotency_key": "ep08-rollback-action",
+      "operation": "rollback",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "actions",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {
+        "parent": "ep08-action-record",
+        "transaction_id": "ep08-txn-002"
+      },
+      "retention": { "policy": "durable", "privacy_class": "system" },
+      "payload": { "target_id": "ep08:actions:external-action" },
+      "outcome_expected": { "resource_id": "ep08:actions:external-action" }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep08-probe-001",
+      "actor": "owner",
+      "target_resource": "ep08:actions:external-action",
+      "target_scope": "actions",
+      "query": "rollback_ledger"
+    },
+    {
+      "id": "ep08-probe-002",
+      "actor": "owner",
+      "target_resource": "ep08:actions:external-action",
+      "target_scope": "actions",
+      "query": "read"
+    }
+  ]
+}

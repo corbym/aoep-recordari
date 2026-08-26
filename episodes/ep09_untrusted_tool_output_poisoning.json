@@ -1,0 +1,55 @@
+{
+  "id": "ep09",
+  "name": "untrusted-tool-output-poisoning",
+  "description": "Tests that an untrusted tool output cannot be quarantine-escaped and used as a trusted instruction (§9.4 fault pattern 9).",
+  "events": [
+    {
+      "id": "ep09-evt-001",
+      "idempotency_key": "ep09-quarantined-output",
+      "operation": "quarantine",
+      "actor": "tool",
+      "actor_trust_tier": "untrusted",
+      "scope": "tool-outputs",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "untrusted" },
+      "causal": { "transaction_id": "ep09-txn-001" },
+      "retention": { "policy": "ephemeral", "privacy_class": "system" },
+      "payload": {
+        "label": "ep09:tool-outputs:quarantined",
+        "description": "Quarantined tool output — flagged as untrusted by provenance inspector",
+        "tags": "tool-output quarantine untrusted"
+      },
+      "outcome_expected": { "resource_id": "ep09:tool-outputs:quarantined" }
+    },
+    {
+      "id": "ep09-evt-002",
+      "idempotency_key": "ep09-agent-reads-quarantined",
+      "operation": "read",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "tool-outputs",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep09-txn-002" },
+      "retention": { "policy": "ephemeral", "privacy_class": "system" },
+      "payload": { "target_id": "ep09:tool-outputs:quarantined" },
+      "outcome_expected": { "resource_id": "ep09:tool-outputs:quarantined" }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep09-probe-001",
+      "actor": "agent",
+      "target_resource": "ep09:tool-outputs:quarantined",
+      "target_scope": "tool-outputs",
+      "query": "trust_tier"
+    },
+    {
+      "id": "ep09-probe-002",
+      "actor": "agent",
+      "target_resource": "ep09:tool-outputs:quarantined",
+      "target_scope": "tool-outputs",
+      "query": "read"
+    }
+  ]
+}

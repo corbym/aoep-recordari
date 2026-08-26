@@ -1,0 +1,6 @@
+.env
+results/*.json
+results/*.csv
+*.exe
+*.test
+vendor/

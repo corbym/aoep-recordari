@@ -1,0 +1,41 @@
+{
+  "id": "ep05",
+  "name": "cross-user-scope-leak",
+  "description": "Tests that user A's memories are not visible to user B (§9.4 fault pattern 5).",
+  "events": [
+    {
+      "id": "ep05-evt-001",
+      "idempotency_key": "ep05-userA-private",
+      "operation": "write",
+      "actor": "user_a",
+      "actor_trust_tier": "trusted",
+      "scope": "user_a:private",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep05-txn-001" },
+      "retention": { "policy": "durable", "privacy_class": "confidential" },
+      "payload": {
+        "label": "ep05:user_a:private:secret",
+        "description": "User A private memory — must not be visible to user B",
+        "tags": "private user_a scope:user_a:private"
+      },
+      "outcome_expected": { "resource_id": "ep05:user_a:private:secret" }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep05-probe-001",
+      "actor": "user_b",
+      "target_resource": "ep05:user_a:private:secret",
+      "target_scope": "user_a:private",
+      "query": "read"
+    },
+    {
+      "id": "ep05-probe-002",
+      "actor": "user_b",
+      "target_resource": "all",
+      "target_scope": "user_a:private",
+      "query": "list"
+    }
+  ]
+}

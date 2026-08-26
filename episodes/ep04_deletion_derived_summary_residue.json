@@ -1,0 +1,63 @@
+{
+  "id": "ep04",
+  "name": "deletion-derived-summary-residue",
+  "description": "Tests that deleting a source memory also removes derived embeddings and summaries (§9.4 fault pattern 4).",
+  "events": [
+    {
+      "id": "ep04-evt-001",
+      "idempotency_key": "ep04-source-fact",
+      "operation": "write",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "personal",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep04-txn-001" },
+      "retention": { "policy": "durable", "privacy_class": "user" },
+      "payload": {
+        "label": "ep04:personal:source-fact",
+        "description": "Personal fact that will be deleted — must not survive in derived tiers",
+        "tags": "personal fact owner"
+      },
+      "outcome_expected": { "resource_id": "ep04:personal:source-fact" }
+    },
+    {
+      "id": "ep04-evt-002",
+      "idempotency_key": "ep04-delete-source",
+      "operation": "tombstone",
+      "actor": "owner",
+      "actor_trust_tier": "trusted",
+      "scope": "personal",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "parent": "ep04-source-fact", "transaction_id": "ep04-txn-002" },
+      "retention": { "policy": "durable", "privacy_class": "user" },
+      "payload": { "target_id": "ep04:personal:source-fact" },
+      "outcome_expected": {
+        "resource_id": "ep04:personal:source-fact",
+        "ledger_entry": {
+          "resource_id": "ep04:personal:source-fact",
+          "scope": "personal",
+          "actor": "owner",
+          "perm_epoch_at_op": 1
+        }
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep04-probe-001",
+      "actor": "owner",
+      "target_resource": "ep04:personal:source-fact",
+      "target_scope": "personal",
+      "query": "read"
+    },
+    {
+      "id": "ep04-probe-002",
+      "actor": "owner",
+      "target_resource": "ep04:personal:source-fact",
+      "target_scope": "personal",
+      "query": "deletion_ledger"
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "id": "ep06",
+  "name": "stale-permission-after-restart",
+  "description": "Tests that cached permissions are not used after a restart when the epoch has advanced (§9.4 fault pattern 6).",
+  "events": [
+    {
+      "id": "ep06-evt-001",
+      "idempotency_key": "ep06-agent-write-epoch1",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "workspace",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep06-txn-001" },
+      "retention": { "policy": "durable", "privacy_class": "shared" },
+      "payload": {
+        "label": "ep06:workspace:agent-write-1",
+        "description": "Agent write under epoch 1 — allowed",
+        "tags": "workspace agent epoch:1"
+      },
+      "outcome_expected": { "resource_id": "ep06:workspace:agent-write-1" }
+    },
+    {
+      "id": "ep06-evt-002",
+      "idempotency_key": "ep06-permission-revoked",
+      "operation": "deny",
+      "actor": "authority",
+      "actor_trust_tier": "trusted",
+      "scope": "workspace",
+      "permission_epoch": 2,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep06-txn-002" },
+      "retention": { "policy": "durable", "privacy_class": "system" },
+      "payload": {
+        "label": "ep06:workspace:epoch-advance",
+        "description": "Epoch advances to 2; agent permission revoked",
+        "tags": "epoch workspace revocation"
+      },
+      "outcome_expected": {}
+    },
+    {
+      "id": "ep06-evt-003",
+      "idempotency_key": "ep06-agent-write-stale-epoch",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "workspace",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "transaction_id": "ep06-txn-003" },
+      "retention": { "policy": "ephemeral", "privacy_class": "shared" },
+      "payload": {
+        "label": "ep06:workspace:agent-write-stale",
+        "description": "Agent attempts write under stale epoch 1 after restart",
+        "tags": "workspace agent stale-epoch"
+      },
+      "outcome_expected": {
+        "resource_id": "ep06:workspace:agent-write-stale",
+        "should_block": true
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep06-probe-001",
+      "actor": "owner",
+      "target_resource": "ep06:workspace:agent-write-stale",
+      "target_scope": "workspace",
+      "query": "read"
+    },
+    {
+      "id": "ep06-probe-002",
+      "actor": "owner",
+      "target_resource": "ep06:workspace:agent-write-1",
+      "target_scope": "workspace",
+      "query": "permission_epoch"
+    }
+  ]
+}
