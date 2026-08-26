@@ -25,6 +25,8 @@ func New(baseURL string) *Adapter {
 
 func (a *Adapter) Name() string { return "mem0" }
 
+func (a *Adapter) ResetEpisode() {}
+
 func (a *Adapter) Setup(ctx context.Context) (func(context.Context) error, error) {
 	return func(ctx context.Context) error { return nil }, fmt.Errorf("mem0 adapter: not yet implemented — wire a local mem0ai server")
 }

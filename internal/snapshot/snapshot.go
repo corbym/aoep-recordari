@@ -2,8 +2,55 @@
 package snapshot
 
 import (
+	"encoding/json"
+	"strings"
+
 	"aoep-recordari/internal/schema"
 )
+
+// extractIDsFromText parses a Recordari lean-list text response and adds any
+// node IDs it finds to dest.
+//
+// Recordari returns audit results as a JSON array of strings, each with format:
+//   "[node-id] label — excerpt (domain, node_kind)"
+//
+// It also handles plain-text line-per-line format as a fallback.
+func extractIDsFromText(text string, dest map[string]bool) {
+	text = strings.TrimSpace(text)
+
+	// Try JSON array first (the most common format from Recordari).
+	if strings.HasPrefix(text, "[") {
+		var items []string
+		if err := json.Unmarshal([]byte(text), &items); err == nil {
+			for _, item := range items {
+				extractIDFromLine(item, dest)
+			}
+			return
+		}
+	}
+
+	// Fallback: plain text, one entry per line.
+	for _, line := range strings.Split(text, "\n") {
+		extractIDFromLine(line, dest)
+	}
+}
+
+// extractIDFromLine extracts the node ID from a single lean-list line.
+// Format: "[node-id] ..."
+func extractIDFromLine(line string, dest map[string]bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "[") {
+		return
+	}
+	end := strings.Index(line, "]")
+	if end <= 1 {
+		return
+	}
+	id := line[1:end]
+	if id != "" {
+		dest[id] = true
+	}
+}
 
 // Snapshot is the reconstructed system state after an episode run.
 // All fields are derived from probe responses; the harness never trusts system self-reports.
@@ -67,7 +114,9 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 			}
 
 		case schema.ProbeDeletionLedger:
-			// audit(mode=archived) returns {nodes:[{id,label,...},...]} for archived (tombstoned) memories.
+			// audit(mode=archived) may return either:
+			// - JSON: {nodes:[{id,...},...]}
+			// - Text: "[node-id] label — excerpt (domain, node_kind)" per line
 			if m, ok := resp.Value.(map[string]any); ok {
 				if nodes, ok := m["nodes"].([]any); ok {
 					for _, n := range nodes {
@@ -78,15 +127,9 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 						}
 					}
 				}
-				// Also handle a flat list of ids or string entries.
-				if entries, ok := m["entries"].([]any); ok {
-					for _, e := range entries {
-						if entry, ok := e.(map[string]any); ok {
-							if id, _ := entry["id"].(string); id != "" {
-								s.DeletionLedger[id] = true
-							}
-						}
-					}
+				// Text response wrapped as {"text": "..."}
+				if text, ok := m["text"].(string); ok {
+					extractIDsFromText(text, s.DeletionLedger)
 				}
 			}
 

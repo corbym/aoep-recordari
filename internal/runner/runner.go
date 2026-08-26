@@ -45,6 +45,7 @@ func Run(ctx context.Context, a adapter.SystemAdapter, episodes []*episode.Episo
 	}
 
 	for _, ep := range episodes {
+		a.ResetEpisode()
 		epResult, err := runEpisode(ctx, a, ep)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "episode %s failed: %v\n", ep.ID, err)

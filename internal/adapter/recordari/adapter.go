@@ -12,16 +12,38 @@ import (
 const benchmarkDomain = "aoep-benchmark"
 
 // Adapter translates AOEP events into Recordari MCP tool calls.
+// idMap maintains a local AOEP resource name → Recordari node ID mapping so that
+// delete, update, and rollback events can resolve their targets without access to
+// the runner's resourceMap.
 type Adapter struct {
 	client *Client
+	idMap  map[string]string // AOEP label/idempotency_key → Recordari node ID
 }
 
 // New creates a Recordari adapter using the given MCP URL and API key.
 func New(mcpURL, apiKey string) *Adapter {
-	return &Adapter{client: NewClient(mcpURL, apiKey)}
+	return &Adapter{
+		client: NewClient(mcpURL, apiKey),
+		idMap:  make(map[string]string),
+	}
+}
+
+// resolveID finds the Recordari node ID for an AOEP resource reference.
+// It checks the internal map using the given name as AOEP label or idempotency_key.
+// If not found, returns name unchanged (allows direct Recordari ID pass-through).
+func (a *Adapter) resolveID(name string) string {
+	if id, ok := a.idMap[name]; ok {
+		return id
+	}
+	return name
 }
 
 func (a *Adapter) Name() string { return "recordari" }
+
+// ResetEpisode clears the internal ID map so each episode starts with a clean slate.
+func (a *Adapter) ResetEpisode() {
+	a.idMap = make(map[string]string)
+}
 
 // Setup verifies connectivity; the benchmark API key already scopes to a clean workspace.
 func (a *Adapter) Setup(ctx context.Context) (func(context.Context) error, error) {
@@ -169,27 +191,54 @@ func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, er
 	}
 	out, err := ParseResult(result)
 	if err != nil {
-		// 23505 = duplicate key: this write is idempotent.
+		// 23505 = duplicate key: this write is idempotent — return the existing ID.
 		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "duplicate") {
-			return ev.IdempotencyKey, nil
+			sysID := ev.IdempotencyKey
+			a.register(ev, sysID)
+			return sysID, nil
 		}
 		return "", err
 	}
-	if id, ok := out["id"].(string); ok {
-		return id, nil
+	// Extract the system-assigned (or idempotency-key-derived) node ID.
+	var sysID string
+	if mem, ok := out["memory"].(map[string]any); ok {
+		sysID, _ = mem["id"].(string)
 	}
-	return "", nil
+	if sysID == "" {
+		sysID, _ = out["id"].(string)
+	}
+	if sysID == "" {
+		sysID = ev.IdempotencyKey
+	}
+	a.register(ev, sysID)
+	return sysID, nil
+}
+
+// register stores all useful AOEP → system ID mappings for this write event.
+func (a *Adapter) register(ev schema.Event, sysID string) {
+	if sysID == "" {
+		return
+	}
+	if ev.IdempotencyKey != "" {
+		a.idMap[ev.IdempotencyKey] = sysID
+	}
+	a.idMap[ev.ID] = sysID
+	if ev.Payload != nil {
+		if label, ok := ev.Payload["label"].(string); ok && label != "" {
+			a.idMap[label] = sysID
+		}
+	}
 }
 
 func (a *Adapter) deliverUpdate(ctx context.Context, ev schema.Event) (string, error) {
 	targetID := ""
 	if ev.Payload != nil {
 		if id, ok := ev.Payload["target_id"].(string); ok {
-			targetID = id
+			targetID = a.resolveID(id)
 		}
 	}
 	if targetID == "" && ev.Causal.Parent != "" {
-		targetID = ev.Causal.Parent
+		targetID = a.resolveID(ev.Causal.Parent)
 	}
 	if targetID == "" {
 		return "", fmt.Errorf("update event %s has no target_id or causal.parent", ev.ID)
@@ -220,11 +269,11 @@ func (a *Adapter) deliverDelete(ctx context.Context, ev schema.Event) error {
 	targetID := ""
 	if ev.Payload != nil {
 		if id, ok := ev.Payload["target_id"].(string); ok {
-			targetID = id
+			targetID = a.resolveID(id)
 		}
 	}
 	if targetID == "" && ev.Causal.Parent != "" {
-		targetID = ev.Causal.Parent
+		targetID = a.resolveID(ev.Causal.Parent)
 	}
 	if targetID == "" {
 		return fmt.Errorf("delete event %s has no target_id or causal.parent", ev.ID)
@@ -309,8 +358,11 @@ func (a *Adapter) deliverRollback(ctx context.Context, ev schema.Event) error {
 	targetID := ""
 	if ev.Payload != nil {
 		if id, ok := ev.Payload["target_id"].(string); ok {
-			targetID = id
+			targetID = a.resolveID(id)
 		}
+	}
+	if targetID == "" && ev.Causal.Parent != "" {
+		targetID = a.resolveID(ev.Causal.Parent)
 	}
 	if targetID == "" {
 		return nil
@@ -361,13 +413,25 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 			resp.Value = nil
 			return resp, nil
 		}
-		result, err := a.client.CallTool(ctx, "recall", map[string]any{"id": nodeID})
+		// Use search (not recall) so archived/deleted nodes return nil — recall returns
+		// archived nodes; search excludes them. This correctly tests no_deleted_content_visible.
+		result, err := a.client.CallTool(ctx, "search", map[string]any{
+			"query":  nodeID,
+			"domain": benchmarkDomain,
+			"limit":  1,
+			"exact":  true,
+		})
 		if err != nil {
 			resp.Error = err.Error()
 			return resp, nil
 		}
 		out, _ := ParseResult(result)
-		resp.Value = out
+		// If nodes list is empty, the resource is not visible.
+		if m, ok := out["nodes"].([]any); ok && len(m) == 0 {
+			resp.Value = nil
+		} else {
+			resp.Value = out
+		}
 
 	case schema.ProbeList:
 		result, err := a.client.CallTool(ctx, "search", map[string]any{

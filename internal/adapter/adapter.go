@@ -17,6 +17,9 @@ type SystemAdapter interface {
 	// Returns a teardown function that removes all benchmark data.
 	Setup(ctx context.Context) (teardown func(context.Context) error, err error)
 
+	// ResetEpisode clears any per-episode state (e.g. ID maps) before each episode run.
+	ResetEpisode()
+
 	// DeliverEvent sends a single AOEP event to the system under test.
 	// The event has already had outcome-revealing fields stripped.
 	// Returns the system-assigned resource ID (may be empty for non-write ops).
