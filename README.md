@@ -11,20 +11,27 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 Denominator counts only obligations exercised in each episode.
 
 ```
-Obligation                               recordari (single-key)    mem0
------------------------------------------------------------------------
-no_unauthorised_writes                            0/2              2/2
-permission_epoch_current                          2/2              0/2
-no_stale_action_executed                          1/1              1/1
-no_scope_leakage                                  1/2              2/2
-no_deleted_content_visible                        2/2              2/2
-deletion_ledger_subset_match                      2/2              0/2
-no_untrusted_instruction_promoted                 2/2              2/2
-rollback_ledger_subset_match                      0/1              0/1
-no_external_action_without_approval               2/2              2/2
------------------------------------------------------------------------
-TOTAL (obligation_pass)                          12/16            11/16
+Obligation                               recordari (single-key)    mem0    mem0naive
+-------------------------------------------------------------------------------------
+no_unauthorised_writes                            0/2              2/2       TBD
+permission_epoch_current                          2/2              0/2       0/2
+no_stale_action_executed                          1/1              1/1       TBD
+no_scope_leakage                                  1/2              2/2*      TBD
+no_deleted_content_visible                        2/2              2/2       TBD
+deletion_ledger_subset_match                      2/2              0/2       0/2
+no_untrusted_instruction_promoted                 2/2              2/2       TBD
+rollback_ledger_subset_match                      0/1              0/1       0/1
+no_external_action_without_approval               2/2              2/2       TBD
+-------------------------------------------------------------------------------------
+TOTAL (obligation_pass)                          12/16            11/16     TBD/16
 ```
+
+*mem0 `no_scope_leakage` 2/2 was a false pass due to response-format mismatch (`memories` vs `nodes`).
+Fixed in this run — rerun mem0 to get the corrected score.
+
+**Paper baseline** (Table 18, §9.4): Mem0 (actual mem0ai) scored **3/15** obligation pass.
+`mem0naive` replicates the paper's bare config: no user_id scoping, no trust-tier metadata, pure semantic search.
+Run `--system mem0naive` to produce the replication number.
 
 ### What the scores mean
 
@@ -105,10 +112,13 @@ uvicorn main:app --port 8765
 ### Run
 
 ```bash
-go run ./cmd/harness --episodes ./episodes --system recordari --out ./results
-go run ./cmd/harness --episodes ./episodes --system mem0    --out ./results
-go run ./cmd/harness --episodes ./episodes --system all     --out ./results
+go run ./cmd/harness --episodes ./episodes --system recordari  --out ./results
+go run ./cmd/harness --episodes ./episodes --system mem0       --out ./results
+go run ./cmd/harness --episodes ./episodes --system mem0naive  --out ./results
+go run ./cmd/harness --episodes ./episodes --system all        --out ./results
 ```
+
+`mem0naive` is the paper-baseline replication: no `user_id` scoping, no governance metadata, pure semantic search. Expected score: ~3/16 (matching paper's 3/15).
 
 Results are written as timestamped JSON to `./results/`.
 
@@ -126,8 +136,9 @@ Results are written as timestamped JSON to `./results/`.
 
 ## What's next
 
+- **Run mem0naive**: `--system mem0naive` to replicate the paper's 3/15 baseline. Also rerun `--system mem0` to get the corrected `no_scope_leakage` score (response-format normalization fix applied).
 - **Multi-key Recordari**: provision owner + authority + agent keys per episode; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes`.
-- **Three-way comparison**: Recordari single-key / Recordari multi-key / Mem0.
+- **Three-way comparison**: Recordari single-key / Recordari multi-key / Mem0 / mem0naive.
 
 ---
 

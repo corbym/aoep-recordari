@@ -1,7 +1,8 @@
-// Package mem0 provides a Mem0 adapter for the AOEP-v0 benchmark harness.
-// Drives a local FastAPI bridge (mem0_server/main.py) that wraps mem0.Memory.
-// Paper baseline: Mem0 scored 3/15 on AOEP-v0.
-package mem0
+// Package mem0naive provides a naive Mem0 adapter matching the paper's baseline config.
+// The paper's local mem0ai configuration "carries no permission epoch, deletion ledger,
+// or trust tier" (§9.6). This adapter replicates that: no user_id scoping, no trust-tier
+// metadata, pure semantic search — so the extraction step loses governance structure.
+package mem0naive
 
 import (
 	"bytes"
@@ -15,14 +16,14 @@ import (
 	"aoep-recordari/internal/schema"
 )
 
-// Adapter translates AOEP events into HTTP calls against the local mem0 bridge.
+// Adapter is a governance-stripped Mem0 adapter (paper baseline replication).
 type Adapter struct {
 	baseURL string
 	http    *http.Client
 	idMap   map[string]string // AOEP key → mem0 memory ID
 }
 
-// New creates a Mem0 adapter pointing at the given bridge URL.
+// New creates a naive Mem0 adapter pointing at the given bridge URL.
 func New(baseURL string) *Adapter {
 	return &Adapter{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -31,11 +32,11 @@ func New(baseURL string) *Adapter {
 	}
 }
 
-func (a *Adapter) Name() string { return "mem0" }
+func (a *Adapter) Name() string { return "mem0naive" }
 
 func (a *Adapter) ResetEpisode() {
 	a.idMap = make(map[string]string)
-	_ = a.deleteReq("/reset_all", nil) // best-effort; errors non-fatal
+	_ = a.deleteReq("/reset_all", nil)
 }
 
 func (a *Adapter) Setup(ctx context.Context) (func(context.Context) error, error) {
@@ -61,25 +62,21 @@ func (a *Adapter) DeliverEvent(ctx context.Context, ev schema.Event) (string, er
 	case schema.OpDelete, schema.OpTombstone:
 		return "", a.deliverDelete(ev)
 	case schema.OpRollback:
-		// mem0 can delete but cannot restore — rollback appears as a delete only.
 		return "", a.deliverDelete(ev)
 	case schema.OpDeny:
-		return "", nil // harness signals: block this write
+		return "", nil
 	default:
-		return "", nil // read, share, unshare, validate — no state change
+		return "", nil
 	}
 }
 
+// deliverWrite stores only the event text — no user_id scoping, no trust-tier tag.
+// This matches the paper: "extraction without an explicit governance envelope" (§9.4).
 func (a *Adapter) deliverWrite(_ context.Context, ev schema.Event) (string, error) {
 	body := map[string]any{
 		"content": buildContent(ev),
-		"user_id": ev.Actor,
-		"metadata": map[string]any{
-			"aoep_event_id":    ev.ID,
-			"aoep_idempotency": ev.IdempotencyKey,
-			"trust_tier":       string(ev.Provenance.TrustTier),
-			"scope":            ev.Scope,
-		},
+		// No user_id — global scope, no isolation between actors.
+		// No trust_tier — governance metadata is absent.
 	}
 	result, err := a.post("/add", body)
 	if err != nil {
@@ -99,34 +96,29 @@ func (a *Adapter) deliverDelete(ev schema.Event) error {
 	return a.deleteReq("/delete/"+memID, nil)
 }
 
-func (a *Adapter) RunProbe(_ context.Context, probe schema.Probe, resourceMap map[string]string) (*schema.ProbeResponse, error) {
+func (a *Adapter) RunProbe(_ context.Context, probe schema.Probe, _ map[string]string) (*schema.ProbeResponse, error) {
 	switch probe.Query {
 	case schema.ProbeRead:
-		return a.probeRead(probe, resourceMap)
+		return a.probeRead(probe)
 	case schema.ProbeList:
-		return a.probeList(probe)
+		return a.probeList()
 	case schema.ProbeDeletionLedger, schema.ProbeRollbackLedger,
 		schema.ProbePermissionEpoch, schema.ProbeConflicts, schema.ProbeTrustTier:
-		// mem0 has no governance ledgers or epoch tracking.
+		// No governance ledgers at all.
 		return &schema.ProbeResponse{ProbeID: probe.ID, Value: nil}, nil
 	default:
 		return &schema.ProbeResponse{ProbeID: probe.ID}, nil
 	}
 }
 
-func (a *Adapter) probeRead(probe schema.Probe, resourceMap map[string]string) (*schema.ProbeResponse, error) {
-	// Try direct lookup by system ID first.
-	if memID, ok := resourceMap[probe.TargetResource]; ok {
-		got, err := a.getJSON("/get/" + memID)
-		if err == nil && got != nil {
-			return &schema.ProbeResponse{ProbeID: probe.ID, Value: got}, nil
-		}
-	}
-	// Semantic search fallback — uses probe.Actor for user-scope isolation.
+// probeRead uses only semantic search — no direct ID lookup.
+// The paper's Mem0 "leaks a deleted billing address" because the semantic index
+// retains extracted facts after deletion; this matches that behavior.
+func (a *Adapter) probeRead(probe schema.Probe) (*schema.ProbeResponse, error) {
 	body := map[string]any{
-		"query":   probe.TargetResource,
-		"user_id": probe.Actor,
-		"limit":   5,
+		"query": probe.TargetResource,
+		// No user_id — searches all memories globally.
+		"limit": 5,
 	}
 	result, err := a.post("/search", body)
 	if err != nil {
@@ -139,10 +131,12 @@ func (a *Adapter) probeRead(probe schema.Probe, resourceMap map[string]string) (
 	return &schema.ProbeResponse{ProbeID: probe.ID, Value: result}, nil
 }
 
-func (a *Adapter) probeList(probe schema.Probe) (*schema.ProbeResponse, error) {
-	got, err := a.getJSON("/list?user_id=" + probe.Actor)
+// probeList returns all memories globally — no actor-scoped filtering.
+func (a *Adapter) probeList() (*schema.ProbeResponse, error) {
+	// No user_id filter — all memories visible to everyone.
+	got, err := a.getJSON("/list")
 	if err != nil {
-		return &schema.ProbeResponse{ProbeID: probe.ID}, err
+		return nil, err
 	}
 	// Normalise: bridge returns {"memories":[...]}, validator expects {"nodes":[...]}.
 	if got != nil {
@@ -150,7 +144,7 @@ func (a *Adapter) probeList(probe schema.Probe) (*schema.ProbeResponse, error) {
 			got = map[string]any{"nodes": mems}
 		}
 	}
-	return &schema.ProbeResponse{ProbeID: probe.ID, Value: got}, nil
+	return &schema.ProbeResponse{Value: got}, nil
 }
 
 // --- ID tracking ---

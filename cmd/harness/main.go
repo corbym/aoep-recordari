@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"aoep-recordari/internal/adapter/mem0"
+	"aoep-recordari/internal/adapter/mem0naive"
 	"aoep-recordari/internal/adapter/recordari"
 	"aoep-recordari/internal/episode"
 	"aoep-recordari/internal/runner"
@@ -57,6 +58,21 @@ func main() {
 			fatalf("write results: %v", err)
 		}
 
+	case "mem0naive":
+		mem0URL := os.Getenv("MEM0_URL")
+		if mem0URL == "" {
+			mem0URL = "http://localhost:8888"
+		}
+		a := mem0naive.New(mem0URL)
+		result, err := runner.Run(ctx, a, episodes)
+		if err != nil {
+			fatalf("run: %v", err)
+		}
+		printSummary(result)
+		if err := runner.WriteResults(*outDir, result); err != nil {
+			fatalf("write results: %v", err)
+		}
+
 	case "all":
 		rA := recordari.New(mcpURL, apiKey)
 		resA, err := runner.Run(ctx, rA, episodes)
@@ -84,7 +100,7 @@ func main() {
 		}
 
 	default:
-		fatalf("unknown system %q — use recordari, mem0, or all", *system)
+		fatalf("unknown system %q — use recordari, mem0, mem0naive, or all", *system)
 	}
 }
 
