@@ -18,9 +18,10 @@ import (
 
 // Adapter is a governance-stripped Mem0 adapter (paper baseline replication).
 type Adapter struct {
-	baseURL string
-	http    *http.Client
-	idMap   map[string]string // AOEP key → mem0 memory ID
+	baseURL  string
+	http     *http.Client
+	idMap    map[string]string // AOEP key → mem0 memory ID
+	labelNL  map[string]string // AOEP label → natural language description (for semantic search)
 }
 
 // New creates a naive Mem0 adapter pointing at the given bridge URL.
@@ -29,6 +30,7 @@ func New(baseURL string) *Adapter {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{},
 		idMap:   make(map[string]string),
+		labelNL: make(map[string]string),
 	}
 }
 
@@ -36,6 +38,7 @@ func (a *Adapter) Name() string { return "mem0naive" }
 
 func (a *Adapter) ResetEpisode() {
 	a.idMap = make(map[string]string)
+	a.labelNL = make(map[string]string)
 	_ = a.deleteReq("/reset_all", nil)
 }
 
@@ -72,9 +75,12 @@ func (a *Adapter) DeliverEvent(ctx context.Context, ev schema.Event) (string, er
 
 // deliverWrite stores only the event text — no user_id scoping, no trust-tier tag.
 // This matches the paper: "extraction without an explicit governance envelope" (§9.4).
+// Uses natural language text so Mem0's LLM extractor can produce facts (otherwise
+// synthetic AOEP labels produce count=0 and nothing is stored).
 func (a *Adapter) deliverWrite(_ context.Context, ev schema.Event) (string, error) {
+	nl := naturalContent(ev)
 	body := map[string]any{
-		"content": buildContent(ev),
+		"content": nl,
 		// No user_id — global scope, no isolation between actors.
 		// No trust_tier — governance metadata is absent.
 	}
@@ -84,6 +90,13 @@ func (a *Adapter) deliverWrite(_ context.Context, ev schema.Event) (string, erro
 	}
 	memID, _ := result["id"].(string)
 	a.register(ev, memID)
+
+	// Record the natural-language text so probeRead can search for it semantically.
+	if ev.Payload != nil {
+		if label, ok := ev.Payload["label"].(string); ok && label != "" {
+			a.labelNL[label] = nl
+		}
+	}
 	return memID, nil
 }
 
@@ -101,7 +114,7 @@ func (a *Adapter) RunProbe(_ context.Context, probe schema.Probe, _ map[string]s
 	case schema.ProbeRead:
 		return a.probeRead(probe)
 	case schema.ProbeList:
-		return a.probeList()
+		return a.probeList(probe)
 	case schema.ProbeDeletionLedger, schema.ProbeRollbackLedger,
 		schema.ProbePermissionEpoch, schema.ProbeConflicts, schema.ProbeTrustTier:
 		// No governance ledgers at all.
@@ -112,11 +125,15 @@ func (a *Adapter) RunProbe(_ context.Context, probe schema.Probe, _ map[string]s
 }
 
 // probeRead uses only semantic search — no direct ID lookup.
-// The paper's Mem0 "leaks a deleted billing address" because the semantic index
-// retains extracted facts after deletion; this matches that behavior.
+// Searches using the stored natural language text for the target resource so
+// Mem0's vector index can match it. Falls back to the label if no NL text known.
 func (a *Adapter) probeRead(probe schema.Probe) (*schema.ProbeResponse, error) {
+	query := probe.TargetResource
+	if nl, ok := a.labelNL[probe.TargetResource]; ok {
+		query = nl
+	}
 	body := map[string]any{
-		"query": probe.TargetResource,
+		"query": query,
 		// No user_id — searches all memories globally.
 		"limit": 5,
 	}
@@ -132,11 +149,11 @@ func (a *Adapter) probeRead(probe schema.Probe) (*schema.ProbeResponse, error) {
 }
 
 // probeList returns all memories globally — no actor-scoped filtering.
-func (a *Adapter) probeList() (*schema.ProbeResponse, error) {
+func (a *Adapter) probeList(probe schema.Probe) (*schema.ProbeResponse, error) {
 	// No user_id filter — all memories visible to everyone.
 	got, err := a.getJSON("/list")
 	if err != nil {
-		return nil, err
+		return &schema.ProbeResponse{ProbeID: probe.ID}, err
 	}
 	// Normalise: bridge returns {"memories":[...]}, validator expects {"nodes":[...]}.
 	if got != nil {
@@ -144,7 +161,7 @@ func (a *Adapter) probeList() (*schema.ProbeResponse, error) {
 			got = map[string]any{"nodes": mems}
 		}
 	}
-	return &schema.ProbeResponse{Value: got}, nil
+	return &schema.ProbeResponse{ProbeID: probe.ID, Value: got}, nil
 }
 
 // --- ID tracking ---
@@ -235,29 +252,31 @@ func (a *Adapter) deleteReq(path string, body map[string]any) error {
 
 // --- Content helpers ---
 
-func buildContent(ev schema.Event) string {
-	var sb strings.Builder
+// naturalContent builds a natural-language string that Mem0's LLM extractor
+// can process into facts. It uses the description, content, text, or summary
+// field — NOT the synthetic AOEP label — so the extractor produces non-zero facts.
+func naturalContent(ev schema.Event) string {
 	if ev.Payload != nil {
-		if label, ok := ev.Payload["label"].(string); ok && label != "" {
-			sb.WriteString(label)
-			sb.WriteString(": ")
-		}
-		for _, key := range []string{"content", "text", "summary"} {
+		for _, key := range []string{"description", "content", "text", "summary"} {
 			if v, ok := ev.Payload[key].(string); ok && v != "" {
-				sb.WriteString(v)
-				break
+				return v
 			}
 		}
-		if sb.Len() == 0 || (len([]rune(sb.String())) > 0 && !strings.Contains(sb.String(), ":")) {
-			data, _ := json.Marshal(ev.Payload)
-			sb.Reset()
-			sb.Write(data)
+	}
+	// Fallback: stringify payload without the label key.
+	if ev.Payload != nil {
+		copy := make(map[string]any, len(ev.Payload))
+		for k, v := range ev.Payload {
+			if k != "label" {
+				copy[k] = v
+			}
+		}
+		if len(copy) > 0 {
+			data, _ := json.Marshal(copy)
+			return string(data)
 		}
 	}
-	if sb.Len() == 0 {
-		sb.WriteString(ev.ID)
-	}
-	return sb.String()
+	return ev.ID
 }
 
 func payloadTarget(ev schema.Event) string {
