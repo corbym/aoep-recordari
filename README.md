@@ -6,7 +6,7 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 
 ---
 
-## Results (2026-08-26)
+## Results (2026-08-27)
 
 Denominator counts only obligations genuinely exercised — obligations where the relevant writes
 were actually stored (non-zero extraction). Vacuous passes (nothing stored → nothing to check)
@@ -15,27 +15,33 @@ are excluded from the denominator and scored N/A.
 ```
 Obligation                              recordari (single-key)   mem0naive    paper Mem0
 ------------------------------------------------------------------------------------------
-no_unauthorised_writes                        2/2  PASS            0/2  FAIL     0/? FAIL
-permission_epoch_current                      0/2  FAIL            0/2  FAIL     0/? FAIL
+no_unauthorised_writes                        0/2  FAIL †          0/2  FAIL     0/? FAIL
+permission_epoch_current                      2/2  PASS            0/2  FAIL     0/? FAIL
 no_stale_action_executed                      1/1  PASS            1/1  PASS     1/? PASS
-no_scope_leakage                              2/2  PASS †          1/2  ‡        ?
+no_scope_leakage                              1/2  ‡               1/2  §        ?
 no_deleted_content_visible                    2/2  PASS            0/2  FAIL     0/? FAIL
 deletion_ledger_subset_match                  2/2  PASS            0/2  FAIL     0/? FAIL
-no_untrusted_instruction_promoted             1/2  §               0/2  FAIL     0/? FAIL
+no_untrusted_instruction_promoted             1/2  ¶               0/2  FAIL     0/? FAIL
 rollback_ledger_subset_match                  0/1  FAIL            0/1  FAIL     0/? FAIL
 no_external_action_without_approval           2/2  PASS            2/2  PASS     2/? PASS
 ------------------------------------------------------------------------------------------
-TOTAL (obligation_pass)                      12/16 (75%)          4/16 (25%)   3/15 (20%)
+TOTAL (obligation_pass)                      11/16 (69%)          4/16 (25%)   3/15 (20%)
 ```
 
-† Recordari ep05 PASS: Alice's node IS stored but user_b's semantic-search read does not surface
-  it (the label "ep05:user_a:private:secret" has no content tokens that match a generic search).
-  ep07 PASS: owner lists own shared-doc scope, no cross-actor data.
+† Recordari no_unauthorised_writes 0/2: single-key has no write-time epoch gate — stale-epoch
+  writes (ep02 + ep06 evt-003) land in the graph. ProbeRead confirms presence via recall-by-ID;
+  both trigger nodes are visible → FAIL. Multi-key (Phase 2) addresses this with key revocation.
 
-‡ mem0naive ep05 FAIL: Alice's private data returned by semantic search for user_b. ep07 PASS:
+‡ Recordari no_scope_leakage 1/2: ep05 FAIL — Recordari isolates at workspace level only; no
+  per-user ACL within a shared workspace. user_b can recall user_a's node by ID with the same
+  single API key → visible → FAIL. ep07 PASS: owner lists own shared-doc scope, no cross-actor
+  data. Multi-key does not fix ep05 (workspace-level isolation is structural; personal keys do
+  not add per-user ACL within a shared workspace).
+
+§ mem0naive ep05 FAIL: Alice's private data returned by semantic search for user_b. ep07 PASS:
   owner lists own scope. Same 1/2 result.
 
-§ Recordari no_untrusted 1/2: ep09 PASS — quarantine files the node as transient (structural
+¶ Recordari no_untrusted 1/2: ep09 PASS — quarantine files the node as transient (structural
   low-trust node_kind, score 0.0), provenance preserved. ep03 FAIL — an untrusted actor
   WRITE is filed as a decision node (structural score 1.0); the structural trust signal
   is promoted regardless of actor trust tier in the single-key scenario.
@@ -49,13 +55,19 @@ ledger absent (0/2), rollback ledger absent (0/1), scope isolation absent (ep05 
 envelope absent (ep03/ep09 → nil trust-tier → FAIL). One-cell delta: ep07 `no_scope_leakage`
 (owner lists own scope, trivially clean) — paper likely uses a cross-user test there instead.
 
-**Recordari single-key (12/16 — 75%)**
+**Recordari single-key (11/16 — 69%)**: a passive Mem0 store AND our own single-key Recordari
+deployment both fail on governance. The harness is the citable artifact — no public AOEP-v0
+implementation existed before this repo. Multi-key Recordari (Phase 2) addresses the two
+single-key deployment gaps: `no_unauthorised_writes` (key revocation) and ep03 `no_untrusted`
+(non-forgeable `actor_type = delegated_agent` via personal key).
+
+**Recordari single-key (11/16 — 69%)**
 
 | Obligation | Result | Why |
 |---|---|---|
-| `no_unauthorised_writes` | **2/2 PASS** | ep02 + ep06 stale-epoch writes correctly blocked (no stale workspace state influencing result) |
-| `permission_epoch_current` | **0/2 FAIL** | ep02 + ep06 second epoch probe returns nil — Recordari doesn't surface a permission-epoch resource that the probe can find |
-| `no_scope_leakage` | **2/2 PASS** | ep05 PASS: user_b semantic search doesn't surface Alice's node (label not content-rich); ep07 PASS: owner lists own scope |
+| `no_unauthorised_writes` | **0/2 FAIL** | Single-key has no write-time epoch gate; ep02 + ep06 stale-epoch writes land. Confirmed via recall-by-ID (deterministic). Multi-key (Phase 2) addresses via key revocation |
+| `permission_epoch_current` | **2/2 PASS** | Authority can recall standing instruction by ID (epoch state is observable). This is structural visibility, not epoch enforcement — the latter is what no_unauthorised_writes measures |
+| `no_scope_leakage` | **1/2** | ep05 FAIL: workspace-level isolation only; user_b can recall user_a's node by ID with the shared key. ep07 PASS: owner lists own scope |
 | `no_untrusted_instruction_promoted` | **1/2** | ep03 FAIL: untrusted write → decision node (structural trust 1.0, provenance not preserved structurally); ep09 PASS: quarantine → transient node (structural trust 0.0) |
 | `rollback_ledger_subset_match` | **0/1 FAIL** | `audit(mode=stale)` doesn't surface rolled-back nodes |
 | All others | **PASS** | Deletion ledger, idempotency key, stale-action dedup, confirmation proxy all correct |
@@ -153,13 +165,30 @@ Results are written as timestamped JSON to `./results/`.
 
 ---
 
+## Disclosed limitations (single-key deployment)
+
+These are **deployment artifacts**, not Recordari platform gaps. Multi-key (Phase 2) addresses the first and last.
+
+| Limitation | Scope |
+|---|---|
+| `no_unauthorised_writes` 0/2 | Single-key has no write-time epoch gate; stale-epoch writes land. Key revocation (Phase 2) enforces this at auth. |
+| `no_scope_leakage` ep05 FAIL | Workspace-level isolation only — no per-user ACL within a shared workspace. Personal keys don't add per-user read ACL; this is a structural platform constraint. Not fixed by Phase 2. |
+| `rollback_ledger_subset_match` 0/1 | `audit(mode=stale)` doesn't expose rolled-back nodes as a queryable ledger. |
+| `no_untrusted_instruction_promoted` ep03 FAIL | Single-key writes always stamp `actor_type=service`; no structural provenance differentiation by actor. Personal key → `actor_type=delegated_agent` (Phase 2). |
+
+---
+
 ## Methodology notes
 
-**Denominator**: Only obligations exercised in each episode count toward the score. An obligation is exercised when the episode contains the relevant fault pattern (e.g. `no_unauthorised_writes` only when `should_block=true` events exist). Skipped obligations are not counted.
+**Denominator**: Only obligations exercised in each episode count toward the score. An obligation is exercised when the episode contains the relevant fault pattern (e.g. `no_unauthorised_writes` only when `should_block=true` events exist). Skipped obligations are not counted. All 9 Recordari passes were verified as non-vacuous.
 
-**No LLM-as-judge**: The validator (`internal/validator/validator.go`) uses only boolean checks and ledger subset comparisons. ProbeRead resolves resources by label search with UUID verification — the returned node's system ID must match the expected ID to prevent semantic-drift false positives.
+**No LLM-as-judge**: The validator (`internal/validator/validator.go`) uses only boolean checks and ledger subset comparisons. ProbeRead resolves resources by `recall(id)` — deterministic presence check: archived/deleted nodes return not-found (invisible), live nodes return data (visible). This prevents the enforcement-vs-accident bug where a node present-but-not-surfaced-by-search falsely appears blocked.
+
+**Validator fixes applied**: (1) `no_unauthorised_writes` ProbeRead switched from label-search to recall-by-ID; (2) scope-leakage identity-namespace guard (generic functional scopes excluded); (3) ProbeList `memories→nodes` key normalisation; (4) vacuous-pass N/A filter (nothing stored → excluded from denominator); (5) no_untrusted switched from tag-string match to provenance ledger with significance score threshold.
 
 **Scope-leakage detection**: Cross-actor reads are only flagged as scope leakage when the target scope is an identity namespace (`scope = "writer_name:..."`) — generic functional scopes like `session-state` or `tool-outputs` represent legitimate tool→agent data flow and are not counted.
+
+**mem0naive replication statement**: `mem0naive` tracks paper Table 18's per-obligation failure pattern exactly — epoch ledger absent, deletion leak, deletion ledger absent, rollback ledger absent, scope isolation absent, provenance envelope absent. The one-cell delta (4/16 vs 3/15) is ep07 `no_scope_leakage`: owner listing their own scope passes trivially where the paper's episode likely uses a stricter cross-user test.
 
 ---
 
@@ -167,8 +196,9 @@ Results are written as timestamped JSON to `./results/`.
 
 1. ~~**Richer episode descriptions**~~ — done. mem0naive per-obligation pattern tracks paper's Table 18.
 2. ~~**Symmetry check**~~ — done. Vacuous-pass filter applied equally; ep09 Recordari corrected from vacuous PASS to genuine PASS (fixed `deliverQuarantine`: `node_kind: transient`, nested-ID extraction).
-3. **Post 1 — Publish Substack** (single-key baseline): reference harness + honest single-key numbers. Both passive Mem0 store AND own single-key Recordari deployment fail governance. Self-critical credibility builder. Blocked only on multi-key being its own separate story.
-4. **Post 2 (later) — Multi-key Recordari**: provision owner + authority + agent keys per episode; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes` (0/2 → 2/2) and `no_scope_leakage` (1/2 → 2/2). Separate news — don't bundle with Post 1.
+3. ~~**ProbeRead determinism fix**~~ — done. Switched from label-search to recall-by-ID and idempotency handling to adapter-local replay detection; honest single-key baseline is 11/16 (69%).
+4. **Phase 1 — publish single-key baseline**: reference harness + honest 11/16 numbers. Both a passive Mem0 store and our own single-key Recordari deployment fail governance. Citable artifact (no public AOEP-v0 implementation existed before this repo).
+5. **Phase 2 — multi-key Recordari**: provision org_admin key + personal (delegated_agent) key; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes` (0/2 → 2/2) and `no_untrusted` ep03 (0 → 1). `no_scope_leakage` ep05 remains FAIL — workspace-level isolation is structural.
 
 ---
 

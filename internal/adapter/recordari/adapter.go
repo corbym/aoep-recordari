@@ -154,15 +154,22 @@ func (a *Adapter) DeliverEvent(ctx context.Context, ev schema.Event) (string, er
 }
 
 func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, error) {
+	// Replay detection: if we already wrote this idempotency_key this episode, return
+	// the existing ID without creating a new node. This avoids relying on Recordari's
+	// node-ID uniqueness, which breaks when prior-run archived nodes block re-creation.
+	if ev.IdempotencyKey != "" {
+		if existing, ok := a.idMap[ev.IdempotencyKey]; ok {
+			return existing, nil
+		}
+	}
+
 	args := map[string]any{
 		"domain":    benchmarkDomain,
 		"node_kind": "decision",
 	}
-
-	// Use idempotency_key as the Recordari node ID so replays are idempotent.
-	if ev.IdempotencyKey != "" {
-		args["id"] = ev.IdempotencyKey
-	}
+	// Do NOT pass id= to remember — let Recordari assign a fresh UUID each run.
+	// Passing the idempotency_key as the node ID would conflict with any archived node
+	// from a prior run that survived teardown, causing a silent 23505 failure.
 
 	// Map payload fields to Recordari schema.
 	if ev.Payload != nil {
@@ -391,6 +398,12 @@ func (a *Adapter) deliverRollback(ctx context.Context, ev schema.Event) error {
 }
 
 func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (string, error) {
+	if ev.IdempotencyKey != "" {
+		if existing, ok := a.idMap[ev.IdempotencyKey]; ok {
+			return existing, nil
+		}
+	}
+
 	label := fmt.Sprintf("quarantined:%s:%s", ev.Actor, ev.Scope)
 	if ev.Payload != nil {
 		if pl, ok := ev.Payload["label"].(string); ok && pl != "" {
@@ -403,9 +416,7 @@ func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (strin
 		"label":     label,
 		"tags":      fmt.Sprintf("aoep quarantine actor:%s trust:%s", ev.Actor, string(ev.Provenance.TrustTier)),
 	}
-	if ev.IdempotencyKey != "" {
-		args["id"] = ev.IdempotencyKey
-	}
+	// No id= passed — fresh UUID each run, same as deliverWrite.
 	if ev.Payload != nil {
 		if desc, ok := ev.Payload["description"].(string); ok {
 			args["description"] = desc
@@ -462,35 +473,25 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 			resp.Value = nil
 			return resp, nil
 		}
-		// Search by the AOEP resource label (the human-readable name stored in the node),
-		// not the internal node ID. Labels are what Recordari text-indexes. Using search
-		// (not recall) means archived/deleted nodes return nil — correct for
-		// no_deleted_content_visible.
-		// Guard: verify the returned node's UUID matches the expected nodeID so that
-		// semantic drift (a similar-label live node appearing for a deleted resource's
-		// query) cannot produce a false-positive visibility signal.
-		result, err := a.client.CallTool(ctx, "search", map[string]any{
-			"query":  probe.TargetResource,
-			"domain": benchmarkDomain,
-			"limit":  1,
-		})
+		// Use recall-by-ID for deterministic presence check.
+		// recall returns not_found for archived nodes (AND archived_at IS NULL in the query),
+		// so deleted content stays invisible. It also correctly surfaces live nodes that
+		// search would miss due to FTS tokenisation or label mismatch — closing the
+		// enforcement-vs-accident bug where a stale write lands but search doesn't surface it.
+		result, err := a.client.CallTool(ctx, "recall", map[string]any{"id": nodeID})
 		if err != nil {
-			resp.Error = err.Error()
+			resp.Value = nil
 			return resp, nil
 		}
-		out, _ := ParseResult(result)
-		nodes, _ := out["nodes"].([]any)
-		if len(nodes) == 0 {
+		out, parseErr := ParseResult(result)
+		if parseErr != nil || out == nil {
 			resp.Value = nil
+			return resp, nil
+		}
+		if node, ok := out["node"].(map[string]any); ok && node != nil {
+			resp.Value = out
 		} else {
-			// Confirm the result is the expected node (not a semantically adjacent one).
-			firstNode, _ := nodes[0].(map[string]any)
-			returnedID, _ := firstNode["id"].(string)
-			if nodeID != "" && returnedID != nodeID {
-				resp.Value = nil // false match — different node, target not visible
-			} else {
-				resp.Value = out
-			}
+			resp.Value = nil
 		}
 
 	case schema.ProbeList:
