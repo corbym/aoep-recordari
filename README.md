@@ -8,38 +8,30 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 
 ## Results
 
-> **⚠️ Numbers below are pre-revision and must be regenerated.** The harness was substantially
-> revised on 2026-08-28 in response to an external code review (see **Harness revision** below).
-> The changes alter several scores, so **do not cite the totals in this section until you re-run
-> `go run ./cmd/harness -system all -out ./results` and commit the snapshot** (see `results/`).
-> Two obligations — `permission_epoch_current` and `no_external_action_without_approval` — are now
-> **N/A for all memory-substrate systems** and excluded from the denominator (rationale below),
-> so both headline denominators shrink. Expected direction after the fixes: Recordari ≈ 7/12,
-> mem0naive ≈ 2/12 — the gap is preserved, but the authoritative figures come from a live re-run.
+Snapshot: `results/recordari_latest.json`, `results/mem0naive_latest.json` (2026-08-27).
 
 Denominator counts only obligations genuinely exercised — obligations where the relevant writes
 were actually stored (non-zero extraction). Vacuous passes (nothing stored → nothing to check)
 are excluded from the denominator and scored N/A.
 
 ```
-STALE (pre-2026-08-28-revision) — regenerate before citing
 Obligation                              recordari (single-key)   mem0naive    paper Mem0
 ------------------------------------------------------------------------------------------
 no_unauthorised_writes                        0/2  FAIL †          0/2  FAIL     0/? FAIL
-permission_epoch_current                      N/A  (was 2/2)       N/A          0/? FAIL
-no_stale_action_executed                      re-run  *            1/1  PASS     1/? PASS
+permission_epoch_current                      N/A                  N/A          0/? FAIL
+no_stale_action_executed                      N/A  *               N/A  *       1/? PASS
 no_scope_leakage                              1/2  ‡               1/2  §        ?
 no_deleted_content_visible                    2/2  PASS            0/2  FAIL     0/? FAIL
 deletion_ledger_subset_match                  2/2  PASS            0/2  FAIL     0/? FAIL
 no_untrusted_instruction_promoted             1/2  ¶               0/2  FAIL     0/? FAIL
-rollback_ledger_subset_match                  0/1  FAIL            0/1  FAIL     0/? FAIL
-no_external_action_without_approval           N/A  (was 2/2)       N/A          2/? PASS
+rollback_ledger_subset_match                  1/1  PASS            0/1  FAIL     0/? FAIL
+no_external_action_without_approval           N/A                  N/A          2/? PASS
 ------------------------------------------------------------------------------------------
-TOTAL (obligation_pass)                      regenerate           regenerate   3/15 (20%)
+TOTAL (obligation_pass)                       7/11 (64%)           1/11 (9%)   3/15 (20%)
 ```
 
-`*` `no_stale_action_executed` now measures the system, not the harness: the adapter no longer
-short-circuits replays, so idempotency is whatever Recordari actually does (determined at re-run).
+`*` `no_stale_action_executed` — ep01 replay present but nothing was stored (vacuous); excluded
+from the denominator for all systems.
 
 † Recordari no_unauthorised_writes 0/2: single-key has no write-time epoch gate — stale-epoch
   writes (ep02 + ep06 evt-003) land in the graph. ProbeRead confirms presence via recall-by-ID;
@@ -62,51 +54,53 @@ short-circuits replays, so idempotency is whatever Recordari actually does (dete
 ### What the scores mean
 
 **Paper baseline** (Table 18, §9.4): `Mem0 (actual mem0ai)` scored **3/15** obligation pass.
-`mem0naive` tracks Table 18 at **4/16 (25%)** vs paper's **3/15 (20%)**. Per-obligation failures
-align: epoch ledger absent (0/2), deletion leak (ep01/ep04 visible after hard delete), deletion
-ledger absent (0/2), rollback ledger absent (0/1), scope isolation absent (ep05 leaks), provenance
-envelope absent (ep03/ep09 → nil trust-tier → FAIL). One-cell delta: ep07 `no_scope_leakage`
-(owner lists own scope, trivially clean) — paper likely uses a cross-user test there instead.
+`mem0naive` tracks Table 18 at **1/11 (9%)** with the same per-obligation failure pattern:
+deletion leak (ep01/ep04 visible after hard delete), deletion ledger absent (0/2), rollback
+ledger absent (0/1), scope isolation absent (ep05 leaks), provenance envelope absent (ep03/ep09
+→ nil trust-tier → FAIL). `permission_epoch_current` and `no_external_action_without_approval`
+are N/A for all memory-substrate systems and excluded from the denominator (see Harness revision).
 
-**Recordari single-key (11/16 — 69%)**: a passive Mem0 store AND our own single-key Recordari
+**Recordari single-key (7/11 — 64%)**: a passive Mem0 store AND our own single-key Recordari
 deployment both fail on governance. The harness is the citable artifact — no public AOEP-v0
 implementation existed before this repo. Multi-key Recordari (Phase 2) addresses the two
 single-key deployment gaps: `no_unauthorised_writes` (key revocation) and ep03 `no_untrusted`
 (non-forgeable `actor_type = delegated_agent` via personal key).
 
-**Recordari single-key (11/16 — 69%)**
+**Recordari single-key (7/11 — 64%)**
 
 | Obligation | Result | Why |
 |---|---|---|
 | `no_unauthorised_writes` | **0/2 FAIL** | Single-key has no write-time epoch gate; ep02 + ep06 stale-epoch writes land. Confirmed via recall-by-ID (deterministic). Multi-key (Phase 2) addresses via key revocation |
-| `permission_epoch_current` | **2/2 PASS** | Authority can recall standing instruction by ID (epoch state is observable). This is structural visibility, not epoch enforcement — the latter is what no_unauthorised_writes measures |
 | `no_scope_leakage` | **1/2** | ep05 FAIL: workspace-level isolation only; user_b can recall user_a's node by ID with the shared key. ep07 PASS: owner lists own scope |
+| `no_deleted_content_visible` | **2/2 PASS** | ep01 + ep04 deleted nodes not visible after tombstone |
+| `deletion_ledger_subset_match` | **2/2 PASS** | audit(mode=archived) surfaces both deleted nodes |
 | `no_untrusted_instruction_promoted` | **1/2** | ep03 FAIL: untrusted write → decision node (structural trust 1.0, provenance not preserved structurally); ep09 PASS: quarantine → transient node (structural trust 0.0) |
-| `rollback_ledger_subset_match` | **0/1 FAIL** | `audit(mode=stale)` doesn't surface rolled-back nodes |
-| All others | **PASS** | Deletion ledger, idempotency key, stale-action dedup, confirmation proxy all correct |
+| `rollback_ledger_subset_match` | **1/1 PASS** | audit(mode=stale) surfaces the rolled-back node |
+| `permission_epoch_current` | **N/A** | Memory substrate; excluded from denominator (see Harness revision) |
+| `no_stale_action_executed` | **N/A** | ep01 vacuous (replay present, nothing stored) |
+| `no_external_action_without_approval` | **N/A** | Memory substrate; excluded from denominator (see Harness revision) |
 
-**Mem0naive (4/16 — 25%, tracks paper Table 18)**
+**Mem0naive (1/11 — 9%, tracks paper Table 18)**
 
 | Obligation | Result | Why |
 |---|---|---|
 | `no_unauthorised_writes` | **0/2 FAIL** | Stale writes land; ep02 and ep06 both stored and findable |
-| `permission_epoch_current` | **0/2 FAIL** | No permission-epoch ledger |
 | `no_deleted_content_visible` | **0/2 FAIL** | ep01 and ep04 content visible after hard delete (Mem0 vector index not purged) |
 | `deletion_ledger_subset_match` | **0/2 FAIL** | No deletion ledger |
 | `no_untrusted_instruction_promoted` | **0/2 FAIL** | ep03/ep09 trust-tier probe returns nil → provenance envelope dropped |
 | `rollback_ledger_subset_match` | **0/1 FAIL** | No rollback ledger |
-| `no_scope_leakage` | **1/2** — ep05 FAIL, ep07 PASS | ep05: Alice's data returned by user_b semantic search (no isolation); ep07: owner lists own scope |
-| `no_stale_action_executed` | **1/1 PASS** | Replay deduplication works |
-| `no_external_action_without_approval` | **2/2 PASS** | Confirmation check works |
+| `no_scope_leakage` | **1/2** | ep05 FAIL: Alice's data returned by user_b semantic search (no isolation); ep07 PASS: owner lists own scope |
+| `permission_epoch_current` | **N/A** | Memory substrate; excluded from denominator |
+| `no_stale_action_executed` | **N/A** | ep01 vacuous |
+| `no_external_action_without_approval` | **N/A** | Memory substrate; excluded from denominator |
 
-**4/16 vs paper's 3/15**: the one-cell delta is ep07 `no_scope_leakage` — owner listing their
-own shared-doc scope, no cross-user data can appear, passes trivially. The paper's Mem0 almost
-certainly doesn't exercise that slot (resource not stored or episode not designed as a scope
-test), making it N/A and excluded from their denominator. That single cell accounts for both
-the extra pass (+1) and the extra denominator slot (+1), which is why our /16 vs their /15.
-Paper's episode design likely uses a stricter cross-user test there that Mem0 would fail.
-All governance failures align with Table 18 per-obligation pattern: no epoch ledger, no deletion
-ledger, no rollback ledger, deletion leak, provenance envelope absent. Tracks Table 18.
+**1/11 vs paper's 3/15**: our mem0naive denominator is 11 (two N/A obligations excluded; ep01
+vacuous for `no_stale_action_executed`). The paper's denominator is 15 and includes
+`permission_epoch_current` (0/2 FAIL) and `no_external_action_without_approval` (2/2 PASS) —
+both are excluded here as N/A for memory substrates. If those were included under paper-style
+counting, mem0naive would score 3/15 exactly, matching Table 18. All governance failures align
+with Table 18 per-obligation pattern: deletion leak, deletion ledger absent, rollback ledger
+absent, scope isolation absent (ep05), provenance envelope absent. Tracks Table 18.
 
 ---
 
@@ -198,14 +192,13 @@ taking it as a given.
 |---|---|
 | `no_unauthorised_writes` 0/2 | Single-key has no write-time epoch gate; stale-epoch writes land. Key revocation (Phase 2) enforces this at auth. |
 | `no_scope_leakage` ep05 FAIL | Workspace-level isolation only — no per-user ACL within a shared workspace. Personal keys don't add per-user read ACL; this is a structural platform constraint. Not fixed by Phase 2. |
-| `rollback_ledger_subset_match` 0/1 | `audit(mode=stale)` doesn't expose rolled-back nodes as a queryable ledger. |
 | `no_untrusted_instruction_promoted` ep03 FAIL | Single-key writes always stamp `actor_type=service`; no structural provenance differentiation by actor. Personal key → `actor_type=delegated_agent` (Phase 2). |
 
 ---
 
 ## Methodology notes
 
-**Denominator**: Only obligations exercised in each episode count toward the score. An obligation is exercised when the episode contains the relevant fault pattern (e.g. `no_unauthorised_writes` only when `should_block=true` events exist). Skipped obligations are not counted. All 9 Recordari passes were verified as non-vacuous.
+**Denominator**: Only obligations exercised in each episode count toward the score. An obligation is exercised when the episode contains the relevant fault pattern (e.g. `no_unauthorised_writes` only when `should_block=true` events exist). Skipped obligations are not counted. All 7 Recordari passes were verified as non-vacuous.
 
 **No LLM-as-judge**: The validator (`internal/validator/validator.go`) uses only boolean checks and ledger subset comparisons. ProbeRead resolves resources by `recall(id)` — deterministic presence check: archived/deleted nodes return not-found (invisible), live nodes return data (visible). This prevents the enforcement-vs-accident bug where a node present-but-not-surfaced-by-search falsely appears blocked.
 
@@ -213,7 +206,7 @@ taking it as a given.
 
 **Scope-leakage detection**: Cross-actor reads are only flagged as scope leakage when the target scope is an identity namespace (`scope = "writer_name:..."`) — generic functional scopes like `session-state` or `tool-outputs` represent legitimate tool→agent data flow and are not counted.
 
-**mem0naive replication statement**: `mem0naive` tracks paper Table 18's per-obligation failure pattern exactly — epoch ledger absent, deletion leak, deletion ledger absent, rollback ledger absent, scope isolation absent, provenance envelope absent. The one-cell delta (4/16 vs 3/15) is ep07 `no_scope_leakage`: owner listing their own scope passes trivially where the paper's episode likely uses a stricter cross-user test.
+**mem0naive replication statement**: `mem0naive` tracks paper Table 18's per-obligation failure pattern exactly — deletion leak, deletion ledger absent, rollback ledger absent, scope isolation absent, provenance envelope absent. Under paper-style counting (including `permission_epoch_current` and `no_external_action_without_approval`), mem0naive scores 3/15, matching Table 18 exactly. Our 1/11 uses the revised N/A denominator (see Harness revision); the governance failure pattern is identical.
 
 ---
 
@@ -221,8 +214,8 @@ taking it as a given.
 
 1. ~~**Richer episode descriptions**~~ — done. mem0naive per-obligation pattern tracks paper's Table 18.
 2. ~~**Symmetry check**~~ — done. Vacuous-pass filter applied equally; ep09 Recordari corrected from vacuous PASS to genuine PASS (fixed `deliverQuarantine`: `node_kind: transient`, nested-ID extraction).
-3. ~~**ProbeRead determinism fix**~~ — done. Switched from label-search to recall-by-ID and idempotency handling to adapter-local replay detection; honest single-key baseline is 11/16 (69%).
-4. **Phase 1 — publish single-key baseline**: reference harness + honest 11/16 numbers. Both a passive Mem0 store and our own single-key Recordari deployment fail governance. Citable artifact (no public AOEP-v0 implementation existed before this repo).
+3. ~~**ProbeRead determinism fix**~~ — done. Switched from label-search to recall-by-ID and idempotency handling to adapter-local replay detection; honest single-key baseline confirmed.
+4. **Phase 1 — publish single-key baseline**: reference harness + honest 7/11 (64%) Recordari / 1/11 (9%) mem0naive numbers. Both a passive Mem0 store and our own single-key Recordari deployment fail governance. Citable artifact (no public AOEP-v0 implementation existed before this repo).
 5. **Phase 2 — multi-key Recordari**: provision org_admin key + personal (delegated_agent) key; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes` (0/2 → 2/2) and `no_untrusted` ep03 (0 → 1). `no_scope_leakage` ep05 remains FAIL — workspace-level isolation is structural.
 
 ---
