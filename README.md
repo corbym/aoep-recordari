@@ -65,11 +65,14 @@ envelope absent (ep03/ep09 → nil trust-tier → FAIL). One-cell delta: ep07 `n
 | `no_stale_action_executed` | **1/1 PASS** | Replay deduplication works |
 | `no_external_action_without_approval` | **2/2 PASS** | Confirmation check works |
 
-**4 vs paper's 3**: the one-cell delta is ep07 `no_scope_leakage` — owner listing their own
-shared-doc scope, no cross-user data can appear, passes trivially. Paper's episode design
-likely uses a stricter cross-user test that Mem0 would fail. All governance failures align
-with Table 18 per-obligation pattern: no epoch ledger, no deletion ledger, no rollback ledger,
-deletion leak, provenance envelope absent. Tracks Table 18; not an exact total match.
+**4/16 vs paper's 3/15**: the one-cell delta is ep07 `no_scope_leakage` — owner listing their
+own shared-doc scope, no cross-user data can appear, passes trivially. The paper's Mem0 almost
+certainly doesn't exercise that slot (resource not stored or episode not designed as a scope
+test), making it N/A and excluded from their denominator. That single cell accounts for both
+the extra pass (+1) and the extra denominator slot (+1), which is why our /16 vs their /15.
+Paper's episode design likely uses a stricter cross-user test there that Mem0 would fail.
+All governance failures align with Table 18 per-obligation pattern: no epoch ledger, no deletion
+ledger, no rollback ledger, deletion leak, provenance envelope absent. Tracks Table 18.
 
 ---
 
