@@ -16,7 +16,7 @@
       "retention": { "policy": "durable", "privacy_class": "confidential" },
       "payload": {
         "label": "ep05:user_a:private:secret",
-        "description": "User A private memory — must not be visible to user B",
+        "description": "Alice's next cardiology appointment is March 4th at 2pm with Dr Williams at Memorial Clinic. Patient ID MED-7823. Home address: 42 Riverside Drive. This health record is private to Alice's account.",
         "tags": "private user_a scope:user_a:private"
       },
       "outcome_expected": { "resource_id": "ep05:user_a:private:secret" }

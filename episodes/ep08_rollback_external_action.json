@@ -20,7 +20,7 @@
       },
       "payload": {
         "label": "ep08:actions:external-action",
-        "description": "External action record — requires confirmation before execution",
+        "description": "Agent submitted pull request #1247 to merge the payment-v2 feature branch into production. The PR updates the payment processing module and was filed against the main repository at 14:32 UTC on January 20 2024.",
         "tags": "actions agent external requires-confirmation"
       },
       "outcome_expected": { "resource_id": "ep08:actions:external-action" }

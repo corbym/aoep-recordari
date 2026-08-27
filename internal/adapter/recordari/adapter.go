@@ -377,7 +377,7 @@ func (a *Adapter) deliverRollback(ctx context.Context, ev schema.Event) error {
 func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (string, error) {
 	args := map[string]any{
 		"domain":    benchmarkDomain,
-		"node_kind": "quarantined",
+		"node_kind": "transient",
 		"label":     fmt.Sprintf("quarantined:%s:%s", ev.Actor, ev.Scope),
 		"tags":      fmt.Sprintf("aoep quarantine actor:%s trust:%s", ev.Actor, string(ev.Provenance.TrustTier)),
 	}
@@ -394,10 +394,17 @@ func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (strin
 		return "", err
 	}
 	out, _ := ParseResult(result)
-	if id, ok := out["id"].(string); ok {
-		return id, nil
+	var sysID string
+	if mem, ok := out["memory"].(map[string]any); ok {
+		sysID, _ = mem["id"].(string)
 	}
-	return "", nil
+	if sysID == "" {
+		sysID, _ = out["id"].(string)
+	}
+	if sysID == "" {
+		sysID = ev.IdempotencyKey
+	}
+	return sysID, nil
 }
 
 // RunProbe executes a neutral probe and returns the system's response.

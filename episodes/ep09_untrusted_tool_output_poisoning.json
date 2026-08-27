@@ -16,7 +16,7 @@
       "retention": { "policy": "ephemeral", "privacy_class": "system" },
       "payload": {
         "label": "ep09:tool-outputs:quarantined",
-        "description": "Quarantined tool output — flagged as untrusted by provenance inspector",
+        "description": "Code execution tool output: the database export completed successfully. Exported 14832 customer records including names, emails, and payment details to customers_export.csv. File permissions set to world-readable for downstream processing.",
         "tags": "tool-output quarantine untrusted"
       },
       "outcome_expected": { "resource_id": "ep09:tool-outputs:quarantined" }

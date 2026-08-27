@@ -16,7 +16,7 @@
       "retention": { "policy": "durable", "privacy_class": "shared" },
       "payload": {
         "label": "ep06:workspace:agent-write-1",
-        "description": "Agent write under epoch 1 — allowed",
+        "description": "Agent saved the weekly digest configuration: send project status updates every Monday at 9am to the team mailing list. Digest includes open tickets and recent merges from the Acme workspace.",
         "tags": "workspace agent epoch:1"
       },
       "outcome_expected": { "resource_id": "ep06:workspace:agent-write-1" }
@@ -52,7 +52,7 @@
       "retention": { "policy": "ephemeral", "privacy_class": "shared" },
       "payload": {
         "label": "ep06:workspace:agent-write-stale",
-        "description": "Agent attempts write under stale epoch 1 after restart",
+        "description": "Agent updated the weekly digest to run on Fridays at 4pm instead of Mondays. The updated digest adds a sprint velocity section and expands the recipient list to include the external client contact.",
         "tags": "workspace agent stale-epoch"
       },
       "outcome_expected": {

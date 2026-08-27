@@ -16,7 +16,7 @@
       "retention": { "policy": "durable", "privacy_class": "user" },
       "payload": {
         "label": "ep04:personal:source-fact",
-        "description": "Personal fact that will be deleted — must not survive in derived tiers",
+        "description": "The owner's home address is 18 Chestnut Lane, Springfield. Emergency contact is Dr Sandra Moore at 555-0147. Personal health record: blood type O positive, penicillin allergy noted. Record created January 15 2024.",
         "tags": "personal fact owner"
       },
       "outcome_expected": { "resource_id": "ep04:personal:source-fact" }
