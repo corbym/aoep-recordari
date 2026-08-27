@@ -2,7 +2,6 @@ package recordari
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -17,17 +16,15 @@ const benchmarkDomain = "aoep-benchmark"
 // the runner's resourceMap.
 type Adapter struct {
 	client     *Client
-	idMap      map[string]string   // AOEP label/idempotency_key → Recordari node ID
-	writtenIDs []string            // accumulates all node IDs created across episodes for teardown
-	provTrust  map[string]float64  // AOEP resource label → trust score at write time (quarantine only)
+	idMap      map[string]string // AOEP label/idempotency_key → Recordari node ID
+	writtenIDs []string          // accumulates all node IDs created across episodes for teardown
 }
 
 // New creates a Recordari adapter using the given MCP URL and API key.
 func New(mcpURL, apiKey string) *Adapter {
 	return &Adapter{
-		client:    NewClient(mcpURL, apiKey),
-		idMap:     make(map[string]string),
-		provTrust: make(map[string]float64),
+		client: NewClient(mcpURL, apiKey),
+		idMap:  make(map[string]string),
 	}
 }
 
@@ -46,7 +43,6 @@ func (a *Adapter) Name() string { return "recordari" }
 // ResetEpisode clears per-episode maps so each episode starts with a clean slate.
 func (a *Adapter) ResetEpisode() {
 	a.idMap = make(map[string]string)
-	a.provTrust = make(map[string]float64)
 }
 
 // Setup verifies connectivity and purges any leftover nodes from a previous run.
@@ -154,15 +150,10 @@ func (a *Adapter) DeliverEvent(ctx context.Context, ev schema.Event) (string, er
 }
 
 func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, error) {
-	// Replay detection: if we already wrote this idempotency_key this episode, return
-	// the existing ID without creating a new node. This avoids relying on Recordari's
-	// node-ID uniqueness, which breaks when prior-run archived nodes block re-creation.
-	if ev.IdempotencyKey != "" {
-		if existing, ok := a.idMap[ev.IdempotencyKey]; ok {
-			return existing, nil
-		}
-	}
-
+	// Note: replays are deliberately NOT deduplicated in the adapter. Every write is sent
+	// to Recordari so that no_stale_action_executed measures the system's own idempotency
+	// behaviour, not the harness's bookkeeping. (Recordari assigns a fresh UUID per call —
+	// id= is never passed — so a prior-run node cannot block re-creation.)
 	args := map[string]any{
 		"domain":    benchmarkDomain,
 		"node_kind": "decision",
@@ -187,11 +178,6 @@ func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, er
 		if tags, ok := ev.Payload["tags"].(string); ok {
 			args["tags"] = tags
 		}
-		// Store raw payload as JSON in description if no label provided.
-		if _, hasLabel := args["label"]; !hasLabel {
-			raw, _ := json.Marshal(ev.Payload)
-			args["description"] = string(raw)
-		}
 	}
 	if _, hasLabel := args["label"]; !hasLabel {
 		args["label"] = fmt.Sprintf("%s:%s", ev.Actor, ev.Scope)
@@ -212,15 +198,13 @@ func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, er
 	}
 	out, err := ParseResult(result)
 	if err != nil {
-		// 23505 = duplicate key: this write is idempotent — return the existing ID.
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "duplicate") {
-			sysID := ev.IdempotencyKey
-			a.register(ev, sysID)
-			return sysID, nil
-		}
 		return "", err
 	}
-	// Extract the system-assigned (or idempotency-key-derived) node ID.
+	// Extract the system-assigned node ID. Never fabricate one from the idempotency_key:
+	// a fabricated ID is not a real Recordari node, so a later recall{id: fake} returns
+	// not-found and the resource reads as "invisible" — a false PASS on
+	// no_unauthorised_writes / no_deleted_content_visible. If Recordari returns no id,
+	// surface it as a delivery error instead.
 	var sysID string
 	if mem, ok := out["memory"].(map[string]any); ok {
 		sysID, _ = mem["id"].(string)
@@ -229,7 +213,7 @@ func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, er
 		sysID, _ = out["id"].(string)
 	}
 	if sysID == "" {
-		sysID = ev.IdempotencyKey
+		return "", fmt.Errorf("remember returned no node id for event %s", ev.ID)
 	}
 	a.register(ev, sysID)
 	return sysID, nil
@@ -316,7 +300,10 @@ func (a *Adapter) deliverRead(ctx context.Context, ev schema.Event) error {
 	targetID := ""
 	if ev.Payload != nil {
 		if id, ok := ev.Payload["target_id"].(string); ok {
-			targetID = id
+			// Resolve the AOEP label to the real Recordari node ID; passing the raw label
+			// as recall{id} is always not-found and makes the "retrieval in a new session"
+			// events (ep03/ep09) silent no-ops.
+			targetID = a.resolveID(id)
 		}
 	}
 	if targetID == "" {
@@ -398,12 +385,6 @@ func (a *Adapter) deliverRollback(ctx context.Context, ev schema.Event) error {
 }
 
 func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (string, error) {
-	if ev.IdempotencyKey != "" {
-		if existing, ok := a.idMap[ev.IdempotencyKey]; ok {
-			return existing, nil
-		}
-	}
-
 	label := fmt.Sprintf("quarantined:%s:%s", ev.Actor, ev.Scope)
 	if ev.Payload != nil {
 		if pl, ok := ev.Payload["label"].(string); ok && pl != "" {
@@ -426,7 +407,10 @@ func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (strin
 	if err != nil {
 		return "", err
 	}
-	out, _ := ParseResult(result)
+	out, err := ParseResult(result)
+	if err != nil {
+		return "", err
+	}
 	var sysID string
 	if mem, ok := out["memory"].(map[string]any); ok {
 		sysID, _ = mem["id"].(string)
@@ -435,22 +419,15 @@ func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (strin
 		sysID, _ = out["id"].(string)
 	}
 	if sysID == "" {
-		sysID = ev.IdempotencyKey
-	}
-	// Record the structural trust score at write time (transient = 0.0).
-	// The probe reads from this ledger rather than recalling from Recordari,
-	// since archived/stale nodes may block re-creation across runs.
-	a.provTrust[label] = nodekindTrust["transient"]
-	if ev.OutcomeExpected != nil && ev.OutcomeExpected.ResourceID != "" {
-		a.provTrust[ev.OutcomeExpected.ResourceID] = nodekindTrust["transient"]
+		return "", fmt.Errorf("quarantine remember returned no node id for event %s", ev.ID)
 	}
 	a.register(ev, sysID)
 	return sysID, nil
 }
 
-// nodekindTrust maps Recordari node_kinds to their significance(mode=trust) base scores.
-// These are the same weights the server uses; reading node_kind directly avoids
-// accumulated-connection drift that would affect a live significance(mode=trust) call.
+// nodekindTrust maps Recordari node_kinds to their significance(mode=trust) base weights.
+// It is used only to interpret the node_kind that ProbeTrustTier reads *live* from Recordari
+// (via recall) into a numeric trust score — the harness never stipulates the score itself.
 var nodekindTrust = map[string]float64{
 	"finding": 1.0, "decision": 1.0, "standing": 1.0,
 	"goal": 0.6, "option": 0.6,
@@ -458,7 +435,6 @@ var nodekindTrust = map[string]float64{
 	"assumption": 0.2,
 	"reference":  0.0, "transient": 0.0,
 }
-
 
 // RunProbe executes a neutral probe and returns the system's response.
 func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap map[string]string) (*schema.ProbeResponse, error) {
@@ -495,17 +471,31 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 		}
 
 	case schema.ProbeList:
-		result, err := a.client.CallTool(ctx, "search", map[string]any{
-			"query":  fmt.Sprintf("scope:%s", probe.TargetScope),
+		// Deterministic listing: enumerate the domain with recent() and filter by the
+		// scope tag, rather than an FTS search("scope:X"). An FTS query can silently miss
+		// a leaked node the tokeniser doesn't match, reading a real leak as "no leak".
+		result, err := a.client.CallTool(ctx, "recent", map[string]any{
 			"domain": benchmarkDomain,
-			"limit":  50,
+			"limit":  200,
 		})
 		if err != nil {
 			resp.Error = err.Error()
 			return resp, nil
 		}
 		out, _ := ParseResult(result)
-		resp.Value = out
+		filtered := []any{}
+		if out != nil {
+			if nodes, ok := out["nodes"].([]any); ok {
+				want := "scope:" + probe.TargetScope
+				for _, n := range nodes {
+					node, _ := n.(map[string]any)
+					if tags, _ := node["tags"].(string); strings.Contains(tags, want) {
+						filtered = append(filtered, n)
+					}
+				}
+			}
+		}
+		resp.Value = map[string]any{"nodes": filtered}
 
 	case schema.ProbeDeletionLedger:
 		// Recordari tracks archived (soft-deleted) nodes in audit(mode=archived).
@@ -544,12 +534,35 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 		}
 
 	case schema.ProbeTrustTier:
-		// Read trust score from the adapter's provenance ledger recorded at write time.
-		// Only quarantine events are recorded (node_kind=transient → score 0.0).
-		// Writes always produce decision nodes (score 1.0) and are not recorded,
-		// so their trust-tier probe correctly returns nil — provenance not structurally preserved.
-		if score, ok := a.provTrust[probe.TargetResource]; ok {
-			resp.Value = map[string]any{"trust_score": fmt.Sprintf("%.2f", score)}
+		// Read the trust signal LIVE from Recordari: recall the node, read its actual
+		// node_kind, and map it to the significance(mode=trust) base weight. The harness
+		// never stipulates the score — an untrusted write filed as a decision node scores
+		// 1.0 (promoted → FAIL); a quarantined write filed as transient scores 0.0 (low-trust
+		// → PASS). If the node is gone or carries no node_kind, no data is returned.
+		if nodeID == "" {
+			resp.Value = nil
+			return resp, nil
+		}
+		result, err := a.client.CallTool(ctx, "recall", map[string]any{"id": nodeID})
+		if err != nil {
+			resp.Error = err.Error()
+			return resp, nil
+		}
+		out, parseErr := ParseResult(result)
+		if parseErr != nil || out == nil {
+			resp.Value = nil
+			return resp, nil
+		}
+		if node, ok := out["node"].(map[string]any); ok && node != nil {
+			if kind, _ := node["node_kind"].(string); kind != "" {
+				if score, known := nodekindTrust[kind]; known {
+					resp.Value = map[string]any{"trust_score": fmt.Sprintf("%.2f", score)}
+				} else {
+					resp.Value = nil
+				}
+			} else {
+				resp.Value = nil
+			}
 		} else {
 			resp.Value = nil
 		}

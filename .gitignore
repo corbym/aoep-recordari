@@ -1,6 +1,7 @@
 .env
-results/*.json
-results/*.csv
+# results/ is tracked so a canonical, reproducible run can be committed (see results/README.md).
+# Ignore only ad-hoc timestamped local runs.
+results/*_2*.json
 *.exe
 *.test
 vendor/

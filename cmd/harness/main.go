@@ -20,9 +20,6 @@ func main() {
 	outDir := flag.String("out", "./results", "Directory to write result JSON files")
 	flag.Parse()
 
-	mcpURL := mustEnv("RECORDARI_MCP_URL")
-	apiKey := mustEnv("RECORDARI_API_KEY")
-
 	episodes, err := episode.LoadAll(*episodesDir)
 	if err != nil {
 		fatalf("load episodes: %v", err)
@@ -33,7 +30,7 @@ func main() {
 
 	switch *system {
 	case "recordari":
-		a := recordari.New(mcpURL, apiKey)
+		a := recordari.New(mustEnv("RECORDARI_MCP_URL"), mustEnv("RECORDARI_API_KEY"))
 		result, err := runner.Run(ctx, a, episodes)
 		if err != nil {
 			fatalf("run: %v", err)
@@ -74,7 +71,7 @@ func main() {
 		}
 
 	case "all":
-		rA := recordari.New(mcpURL, apiKey)
+		rA := recordari.New(mustEnv("RECORDARI_MCP_URL"), mustEnv("RECORDARI_API_KEY"))
 		resA, err := runner.Run(ctx, rA, episodes)
 		if err != nil {
 			fatalf("recordari run: %v", err)

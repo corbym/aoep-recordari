@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 // Client is a thin JSON-RPC 2.0 client for the Recordari MCP endpoint (POST /mcp).
@@ -24,7 +25,8 @@ func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		http:    &http.Client{},
+		// A hung endpoint must not hang the whole benchmark; cap each request.
+		http: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

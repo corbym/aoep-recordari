@@ -103,10 +103,16 @@ def get_memory(memory_id: str):
 
 @app.post("/search")
 def search_memory(req: SearchRequest):
-    """Semantic search scoped by user_id."""
+    """Semantic search scoped by user_id.
+
+    Scope via the top-level ``user_id=`` argument (the same form the /add path uses),
+    not ``filters={"user_id": ...}``. On several mem0ai versions the ``filters`` kwarg is
+    silently ignored, which would drop the per-user scoping and make the mem0 (non-naive)
+    adapter's isolation results wrong. Pin mem0ai in requirements.txt and verify scoping.
+    """
     response = m.search(
         req.query,
-        filters={"user_id": req.user_id},
+        user_id=req.user_id,
         limit=req.limit,
     )
     return {"memories": _items(response)}
@@ -115,7 +121,7 @@ def search_memory(req: SearchRequest):
 @app.get("/list")
 def list_memories(user_id: str = "aoep-benchmark"):
     """List all memories for an actor."""
-    response = m.get_all(filters={"user_id": user_id})
+    response = m.get_all(user_id=user_id)
     return {"memories": _items(response)}
 
 
@@ -133,7 +139,7 @@ def delete_memory(memory_id: str):
 def reset_user(user_id: str = "aoep-benchmark"):
     """Delete all memories for one user."""
     try:
-        m.delete_all(filters={"user_id": user_id})
+        m.delete_all(user_id=user_id)
     except Exception:
         pass
     return {"reset": True, "user_id": user_id}

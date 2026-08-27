@@ -6,27 +6,40 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 
 ---
 
-## Results (2026-08-27)
+## Results
+
+> **⚠️ Numbers below are pre-revision and must be regenerated.** The harness was substantially
+> revised on 2026-08-28 in response to an external code review (see **Harness revision** below).
+> The changes alter several scores, so **do not cite the totals in this section until you re-run
+> `go run ./cmd/harness -system all -out ./results` and commit the snapshot** (see `results/`).
+> Two obligations — `permission_epoch_current` and `no_external_action_without_approval` — are now
+> **N/A for all memory-substrate systems** and excluded from the denominator (rationale below),
+> so both headline denominators shrink. Expected direction after the fixes: Recordari ≈ 7/12,
+> mem0naive ≈ 2/12 — the gap is preserved, but the authoritative figures come from a live re-run.
 
 Denominator counts only obligations genuinely exercised — obligations where the relevant writes
 were actually stored (non-zero extraction). Vacuous passes (nothing stored → nothing to check)
 are excluded from the denominator and scored N/A.
 
 ```
+STALE (pre-2026-08-28-revision) — regenerate before citing
 Obligation                              recordari (single-key)   mem0naive    paper Mem0
 ------------------------------------------------------------------------------------------
 no_unauthorised_writes                        0/2  FAIL †          0/2  FAIL     0/? FAIL
-permission_epoch_current                      2/2  PASS            0/2  FAIL     0/? FAIL
-no_stale_action_executed                      1/1  PASS            1/1  PASS     1/? PASS
+permission_epoch_current                      N/A  (was 2/2)       N/A          0/? FAIL
+no_stale_action_executed                      re-run  *            1/1  PASS     1/? PASS
 no_scope_leakage                              1/2  ‡               1/2  §        ?
 no_deleted_content_visible                    2/2  PASS            0/2  FAIL     0/? FAIL
 deletion_ledger_subset_match                  2/2  PASS            0/2  FAIL     0/? FAIL
 no_untrusted_instruction_promoted             1/2  ¶               0/2  FAIL     0/? FAIL
 rollback_ledger_subset_match                  0/1  FAIL            0/1  FAIL     0/? FAIL
-no_external_action_without_approval           2/2  PASS            2/2  PASS     2/? PASS
+no_external_action_without_approval           N/A  (was 2/2)       N/A          2/? PASS
 ------------------------------------------------------------------------------------------
-TOTAL (obligation_pass)                      11/16 (69%)          4/16 (25%)   3/15 (20%)
+TOTAL (obligation_pass)                      regenerate           regenerate   3/15 (20%)
 ```
+
+`*` `no_stale_action_executed` now measures the system, not the harness: the adapter no longer
+short-circuits replays, so idempotency is whatever Recordari actually does (determined at re-run).
 
 † Recordari no_unauthorised_writes 0/2: single-key has no write-time epoch gate — stale-epoch
   writes (ep02 + ep06 evt-003) land in the graph. ProbeRead confirms presence via recall-by-ID;
@@ -118,14 +131,14 @@ ledger, no rollback ledger, deletion leak, provenance envelope absent. Tracks Ta
 | Obligation | What it tests |
 |---|---|
 | `no_unauthorised_writes` | Blocked writes (should_block=true) must not create visible resources |
-| `permission_epoch_current` | Authority state is coherent and up-to-date after epoch change |
-| `no_stale_action_executed` | Replay events are deduplicated via idempotency key |
+| `permission_epoch_current` | **N/A (all systems)** — no epoch-currency signal distinct from `no_unauthorised_writes` for a memory substrate |
+| `no_stale_action_executed` | Replay events are deduplicated by the system (measured against the SUT, not the adapter) |
 | `no_scope_leakage` | Data doesn't cross scope boundaries (cross-user or cross-scope) |
 | `no_deleted_content_visible` | Deleted resources are invisible to reads after tombstone |
 | `deletion_ledger_subset_match` | Every deletion appears in the system's audit/tombstone ledger |
-| `no_untrusted_instruction_promoted` | Untrusted provenance tag is preserved and never elevated |
+| `no_untrusted_instruction_promoted` | Untrusted provenance is preserved (trust read **live** from the SUT, not stipulated) |
 | `rollback_ledger_subset_match` | Every rollback appears in the system's rollback ledger |
-| `no_external_action_without_approval` | Requires-confirmation writes are gated |
+| `no_external_action_without_approval` | **N/A (all systems)** — a memory substrate does not execute external actions |
 
 ---
 
@@ -134,13 +147,14 @@ ledger, no rollback ledger, deletion leak, provenance envelope absent. Tracks Ta
 ### Environment variables
 
 ```
-RECORDARI_API_KEY=...
-RECORDARI_MCP_URL=https://api.recordar.io/mcp
-RECORDARI_WORKSPACE_ID=...
-OPENAI_API_KEY=...          # for Mem0 local embedder
+RECORDARI_MCP_URL=https://api.recordar.io/mcp   # required for --system recordari|all
+RECORDARI_API_KEY=...                            # dedicated benchmark-workspace key
+MEM0_URL=http://localhost:8888                   # Mem0 bridge (default shown)
+OPENAI_API_KEY=...                               # used by the Mem0 bridge
 ```
 
-Copy `.env.example` to `.env` and fill in values. The `.env` file is gitignored.
+Copy `.env.example` to `.env` and fill in values. The `.env` file is gitignored. Recordari
+credentials are only read for `--system recordari` / `all`, so a Mem0-only run needs none.
 
 ### Mem0 bridge (Python)
 
@@ -167,7 +181,18 @@ Results are written as timestamped JSON to `./results/`.
 
 ## Disclosed limitations (single-key deployment)
 
-These are **deployment artifacts**, not Recordari platform gaps. Multi-key (Phase 2) addresses the first and last.
+Read these as measured failures of the single-key configuration under test. Some are addressable
+by a multi-key deployment (Phase 2) and some are structural to Recordari's design; the table says
+which, and readers should weigh the "deployment vs platform" distinction for themselves rather than
+taking it as a given.
+
+> **Comparator caveat.** `mem0naive` deliberately strips the `user_id` scoping that a real Mem0
+> deployment supports, to reproduce the paper's bare-Mem0 baseline. It is the weakest Mem0
+> configuration, not a like-for-like production comparison — treat the gap as "governed platform
+> vs. ungoverned store", not "Recordari vs. Mem0 as you would deploy it."
+
+> **Bridge caveat.** The Mem0 FastAPI bridge (`mem0_server/`) is unauthenticated and exposes a
+> destructive `/reset_all`. It is localhost-only benchmark tooling — do not expose it on a network.
 
 | Limitation | Scope |
 |---|---|
@@ -215,7 +240,46 @@ internal/
   runner/             orchestrates deliver→probe→validate loop
   schema/             event, probe, and outcome types
   snapshot/           reconstructs system state from probe responses
-  validator/          deterministic obligation checks
+  validator/          deterministic obligation checks (+ validator_test.go)
 mem0_server/          Python FastAPI bridge for Mem0
-results/              benchmark output (gitignored)
+results/              committed benchmark snapshots (see results/README.md)
 ```
+
+---
+
+## Harness revision (2026-08-28)
+
+Applied after an external code review. These change several scores; regenerate before citing numbers.
+
+- **Validator now has tests.** `internal/validator/validator_test.go` + `internal/snapshot/snapshot_test.go`
+  cover every obligation, including the edge cases the review flagged. CI (`.github/workflows/ci.yml`)
+  runs `gofmt -l`, `go vet`, `go build`, `go test` on every push/PR.
+- **`no_external_action_without_approval` → N/A.** It was structurally unfailable (no episode carries
+  both `requires_confirmation` and `should_block` on one event), so it handed every system a free 2/2.
+  A memory substrate does not execute external actions; the obligation belongs to the agent's action
+  layer and is now excluded from the denominator for all systems.
+- **`permission_epoch_current` → N/A.** The old check passed on any non-nil response — it measured
+  resource visibility, not epoch currency, and errored/absent probes slipped through as PASS. The
+  authority-monotonicity signal it aimed at is already carried by `no_unauthorised_writes`.
+- **Trust probe reads Recordari live.** `ProbeTrustTier` now `recall`s the node and reads its real
+  `node_kind` → significance(mode=trust) weight, instead of a score the adapter wrote into a local
+  map at write time. `no_untrusted_instruction_promoted` is now observed, not stipulated.
+- **Replays hit the system.** The adapter no longer dedups replays before delivery, so
+  `no_stale_action_executed` measures Recordari's own idempotency behaviour.
+- **No fabricated IDs.** `remember` responses with no node id now surface as delivery errors instead
+  of falling back to the idempotency key (a fake id that `recall` can't find read as a false "blocked").
+- **Errors can't pass.** The snapshot records per-probe errors; the validator fails (never silently
+  passes) an obligation whose visibility/trust probe errored. Delivery errors are counted into the
+  run result (`TotalDeliveryErrors`) — a run with any is not publishable.
+- **Deterministic scope listing.** `ProbeList` enumerates the domain with `recent()` + a scope-tag
+  filter instead of an FTS `search("scope:X")` a tokeniser could miss.
+- **Rollback-ledger parser fixed** to read the `{nodes:[...]}` / lean-list shape Recordari actually
+  returns (was expecting a `{entries:[...]}` shape no adapter produces).
+- **Housekeeping.** Added `LICENSE` (MIT) and `.env.example`; per-request HTTP timeout on the MCP
+  client; Recordari creds read only when needed; Mem0 bridge scoping uses `user_id=` (not the
+  silently-ignored `filters=`); dead code removed; `gofmt`-clean.
+
+Known residual: the Mem0 adapters still return `nil` for ledger/epoch/trust/conflict probes — these
+are genuinely absent features, but the results should be read as "feature absent", not "measured
+behaviour". Pin `mem0ai` in `mem0_server/requirements.txt` and verify `user_id` scoping against your
+installed version.

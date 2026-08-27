@@ -12,7 +12,8 @@ import (
 // node IDs it finds to dest.
 //
 // Recordari returns audit results as a JSON array of strings, each with format:
-//   "[node-id] label — excerpt (domain, node_kind)"
+//
+//	"[node-id] label — excerpt (domain, node_kind)"
 //
 // It also handles plain-text line-per-line format as a fallback.
 func extractIDsFromText(text string, dest map[string]bool) {
@@ -52,6 +53,27 @@ func extractIDFromLine(line string, dest map[string]bool) {
 	}
 }
 
+// collectNodeIDs pulls node IDs out of a probe response value that may be
+// either {"nodes":[{"id":...}]} JSON or a {"text":"..."} lean-list wrapper.
+func collectNodeIDs(v any, dest map[string]bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	if nodes, ok := m["nodes"].([]any); ok {
+		for _, n := range nodes {
+			if node, ok := n.(map[string]any); ok {
+				if id, _ := node["id"].(string); id != "" {
+					dest[id] = true
+				}
+			}
+		}
+	}
+	if text, ok := m["text"].(string); ok {
+		extractIDsFromText(text, dest)
+	}
+}
+
 // Snapshot is the reconstructed system state after an episode run.
 // All fields are derived from probe responses; the harness never trusts system self-reports.
 type Snapshot struct {
@@ -61,32 +83,31 @@ type Snapshot struct {
 	// ResourceVisible maps resource name → whether it appeared in any probe response.
 	ResourceVisible map[string]bool
 
+	// ProbeErrored maps probe ID → whether the probe returned a transport/tool error
+	// (or produced no response at all). An errored probe carries no evidence about the
+	// system's governance behaviour: the validator must not read a nil/absent value from
+	// an errored probe as a PASS.
+	ProbeErrored map[string]bool
+
 	// DeletionLedger is the set of resource IDs the SUT reports as deleted.
 	DeletionLedger map[string]bool
 
-	// RollbackLedger is the set of resource IDs the SUT reports as rolled back.
+	// RollbackLedger is the set of resource IDs the SUT reports as rolled back / restored.
 	RollbackLedger map[string]bool
-
-	// PermissionEpochs maps resource name → the epoch string the SUT reported.
-	PermissionEpochs map[string]string
 
 	// TrustTiers maps resource name → the trust tier the SUT reported for that resource.
 	TrustTiers map[string]string
-
-	// PendingConflicts is the raw conflict list the SUT reported.
-	PendingConflicts []any
 }
 
-// Reconstruct builds a Snapshot from a probe/response set and the episode's resource map.
-// resourceMap maps AOEP resource names → system-assigned IDs (from event delivery).
+// Reconstruct builds a Snapshot from a probe/response set.
 func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snapshot {
 	s := &Snapshot{
-		Responses:        make(map[string]*schema.ProbeResponse),
-		ResourceVisible:  make(map[string]bool),
-		DeletionLedger:   make(map[string]bool),
-		RollbackLedger:   make(map[string]bool),
-		PermissionEpochs: make(map[string]string),
-		TrustTiers:       make(map[string]string),
+		Responses:       make(map[string]*schema.ProbeResponse),
+		ResourceVisible: make(map[string]bool),
+		ProbeErrored:    make(map[string]bool),
+		DeletionLedger:  make(map[string]bool),
+		RollbackLedger:  make(map[string]bool),
+		TrustTiers:      make(map[string]string),
 	}
 
 	for _, r := range responses {
@@ -97,7 +118,13 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 
 	for _, probe := range probes {
 		resp := s.Responses[probe.ID]
-		if resp == nil || resp.Value == nil {
+		// A missing response or a transport/tool error is recorded as errored so the
+		// validator can distinguish "system refused / absent" from "we never observed it".
+		if resp == nil || resp.Error != "" {
+			s.ProbeErrored[probe.ID] = true
+			continue
+		}
+		if resp.Value == nil {
 			continue
 		}
 
@@ -114,58 +141,20 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 			}
 
 		case schema.ProbeDeletionLedger:
-			// audit(mode=archived) may return either:
-			// - JSON: {nodes:[{id,...},...]}
-			// - Text: "[node-id] label — excerpt (domain, node_kind)" per line
-			if m, ok := resp.Value.(map[string]any); ok {
-				if nodes, ok := m["nodes"].([]any); ok {
-					for _, n := range nodes {
-						if node, ok := n.(map[string]any); ok {
-							if id, _ := node["id"].(string); id != "" {
-								s.DeletionLedger[id] = true
-							}
-						}
-					}
-				}
-				// Text response wrapped as {"text": "..."}
-				if text, ok := m["text"].(string); ok {
-					extractIDsFromText(text, s.DeletionLedger)
-				}
-			}
+			// audit(mode=archived) may return {nodes:[{id,...}]} JSON or a lean-list text wrapper.
+			collectNodeIDs(resp.Value, s.DeletionLedger)
 
 		case schema.ProbeRollbackLedger:
-			if m, ok := resp.Value.(map[string]any); ok {
-				if entries, ok := m["entries"].([]any); ok {
-					for _, e := range entries {
-						if entry, ok := e.(map[string]any); ok {
-							if op, _ := entry["operation"].(string); op == "restore" {
-								if id, _ := entry["node_id"].(string); id != "" {
-									s.RollbackLedger[id] = true
-								}
-							}
-						}
-					}
-				}
-			}
-
-		case schema.ProbePermissionEpoch:
-			if m, ok := resp.Value.(map[string]any); ok {
-				if tags, _ := m["tags"].(string); tags != "" {
-					s.PermissionEpochs[probe.TargetResource] = tags
-				}
-			}
+			// Recordari has no dedicated rollback ledger; the probe returns audit(mode=stale)
+			// nodes (same {nodes:[...]} / text shape as the deletion ledger). Parsing it this
+			// way means a restored resource that is genuinely absent from the audit surface
+			// yields an honest "not found" FAIL rather than a parser-shape mismatch.
+			collectNodeIDs(resp.Value, s.RollbackLedger)
 
 		case schema.ProbeTrustTier:
 			if m, ok := resp.Value.(map[string]any); ok {
 				if score, ok := m["trust_score"].(string); ok && score != "" {
 					s.TrustTiers[probe.TargetResource] = score
-				}
-			}
-
-		case schema.ProbeConflicts:
-			if m, ok := resp.Value.(map[string]any); ok {
-				if conflicts, ok := m["conflicts"].([]any); ok {
-					s.PendingConflicts = conflicts
 				}
 			}
 		}

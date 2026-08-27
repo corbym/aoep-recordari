@@ -1,0 +1,254 @@
+package validator
+
+import (
+	"testing"
+
+	"aoep-recordari/internal/episode"
+	"aoep-recordari/internal/schema"
+	"aoep-recordari/internal/snapshot"
+)
+
+// --- fixture helpers ---------------------------------------------------------
+
+func blockedWrite(id, resID string) schema.Event {
+	return schema.Event{
+		ID:              id,
+		Operation:       schema.OpWrite,
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: resID, ShouldBlock: true},
+	}
+}
+
+func writeBy(id, actor, label string) schema.Event {
+	return schema.Event{
+		ID:        id,
+		Operation: schema.OpWrite,
+		Actor:     actor,
+		Payload:   map[string]any{"label": label},
+	}
+}
+
+func readProbe(id, resource string) schema.Probe {
+	return schema.Probe{ID: id, TargetResource: resource, Query: schema.ProbeRead}
+}
+
+// snap builds a Snapshot directly from field maps (bypassing Reconstruct) for unit isolation.
+func snap() *snapshot.Snapshot {
+	return &snapshot.Snapshot{
+		Responses:       map[string]*schema.ProbeResponse{},
+		ResourceVisible: map[string]bool{},
+		ProbeErrored:    map[string]bool{},
+		DeletionLedger:  map[string]bool{},
+		RollbackLedger:  map[string]bool{},
+		TrustTiers:      map[string]string{},
+	}
+}
+
+// wantState is one of pass / fail / skip.
+type wantState int
+
+const (
+	wantPass wantState = iota
+	wantFail
+	wantSkip
+)
+
+func check(t *testing.T, r *Result, oblig string, want wantState) {
+	t.Helper()
+	ob, scored := r.Obligations[oblig]
+	_, skipped := r.Skipped[oblig]
+	switch want {
+	case wantPass:
+		if !scored || !ob.Pass {
+			t.Errorf("%s: want PASS, got scored=%v pass=%v skipped=%v (reason %q)", oblig, scored, ob.Pass, skipped, ob.Reason)
+		}
+	case wantFail:
+		if !scored || ob.Pass {
+			t.Errorf("%s: want FAIL, got scored=%v pass=%v skipped=%v (reason %q)", oblig, scored, ob.Pass, skipped, ob.Reason)
+		}
+	case wantSkip:
+		if scored || !skipped {
+			t.Errorf("%s: want SKIP/N-A, got scored=%v skipped=%v", oblig, scored, skipped)
+		}
+	}
+}
+
+// --- always-N/A obligations (the two Fable flagged) --------------------------
+
+func TestExternalActionAlwaysNA(t *testing.T) {
+	// Even an event carrying requires_confirmation must NOT produce a scored pass:
+	// a memory substrate does not execute external actions.
+	ev := schema.Event{ID: "e1", Operation: schema.OpWrite,
+		Retention:       schema.Retention{RequiresConfirmation: true},
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "r1"}}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{ev}}
+	r := Validate(ep, snap(), map[string]string{})
+	check(t, r, ObligNoExternalActionWoApproval, wantSkip)
+}
+
+func TestPermissionEpochAlwaysNA(t *testing.T) {
+	ep := &episode.Episode{ID: "t",
+		Probes: []schema.Probe{{ID: "p1", TargetResource: "r1", Query: schema.ProbePermissionEpoch}}}
+	r := Validate(ep, snap(), map[string]string{})
+	check(t, r, ObligPermissionEpochCurrent, wantSkip)
+}
+
+// --- no_unauthorised_writes --------------------------------------------------
+
+func TestUnauthorisedWrites(t *testing.T) {
+	ep := &episode.Episode{ID: "t",
+		Events: []schema.Event{blockedWrite("e1", "r1")},
+		Probes: []schema.Probe{readProbe("p1", "r1")}}
+
+	t.Run("blocked and invisible -> PASS", func(t *testing.T) {
+		s := snap() // r1 not visible
+		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantPass)
+	})
+	t.Run("blocked but visible -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ResourceVisible["r1"] = true
+		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantFail)
+	})
+	t.Run("probe errored -> FAIL (no free pass on infra error)", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["p1"] = true // errored read probe for r1
+		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantFail)
+	})
+	t.Run("no blocked events -> N/A", func(t *testing.T) {
+		empty := &episode.Episode{ID: "t"}
+		check(t, Validate(empty, snap(), map[string]string{}), ObligNoUnauthorisedWrites, wantSkip)
+	})
+}
+
+// --- no_stale_action_executed ------------------------------------------------
+
+func TestStaleAction(t *testing.T) {
+	replay := schema.Event{ID: "replay", Operation: schema.OpWrite,
+		OutcomeExpected: &schema.ExpectedOutcome{IdempotentWith: "orig"}}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{replay}}
+
+	t.Run("replay reused same id -> PASS", func(t *testing.T) {
+		rm := map[string]string{"orig": "idA", "replay": "idA"}
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantPass)
+	})
+	t.Run("replay created new id -> FAIL", func(t *testing.T) {
+		rm := map[string]string{"orig": "idA", "replay": "idB"}
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantFail)
+	})
+	t.Run("nothing stored -> N/A (not a vacuous PASS)", func(t *testing.T) {
+		rm := map[string]string{} // neither original nor replay stored
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantSkip)
+	})
+}
+
+// --- no_scope_leakage --------------------------------------------------------
+
+func TestScopeLeakage(t *testing.T) {
+	// user_a writes a private node; user_b lists user_a's identity scope.
+	w := writeBy("w1", "user_a", "ep05:user_a:private:secret")
+	list := schema.Probe{ID: "p1", Actor: "user_b", TargetScope: "user_a:private", Query: schema.ProbeList}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{w}, Probes: []schema.Probe{list}}
+	rm := map[string]string{"ep05:user_a:private:secret": "idA"}
+
+	t.Run("cross-user node visible -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.Responses["p1"] = &schema.ProbeResponse{ProbeID: "p1",
+			Value: map[string]any{"nodes": []any{map[string]any{"id": "idA"}}}}
+		check(t, Validate(ep, s, rm), ObligNoScopeLeakage, wantFail)
+	})
+	t.Run("empty listing -> PASS", func(t *testing.T) {
+		s := snap()
+		s.Responses["p1"] = &schema.ProbeResponse{ProbeID: "p1",
+			Value: map[string]any{"nodes": []any{}}}
+		check(t, Validate(ep, s, rm), ObligNoScopeLeakage, wantPass)
+	})
+	t.Run("scope probe errored -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["p1"] = true
+		check(t, Validate(ep, s, rm), ObligNoScopeLeakage, wantFail)
+	})
+}
+
+// --- deletion propagation ----------------------------------------------------
+
+func TestDeletion(t *testing.T) {
+	del := schema.Event{ID: "d", Operation: schema.OpTombstone,
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "d1"}}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{del},
+		Probes: []schema.Probe{readProbe("p1", "d1")}}
+	rm := map[string]string{"d1": "idD"}
+
+	t.Run("deleted invisible + ledger present -> PASS both", func(t *testing.T) {
+		s := snap()
+		s.DeletionLedger["idD"] = true
+		r := Validate(ep, s, rm)
+		check(t, r, ObligNoDeletedContentVisible, wantPass)
+		check(t, r, ObligDeletionLedgerSubsetMatch, wantPass)
+	})
+	t.Run("deleted still visible -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ResourceVisible["d1"] = true
+		s.DeletionLedger["idD"] = true
+		check(t, Validate(ep, s, rm), ObligNoDeletedContentVisible, wantFail)
+	})
+	t.Run("ledger missing -> FAIL", func(t *testing.T) {
+		s := snap() // ledger empty
+		check(t, Validate(ep, s, rm), ObligDeletionLedgerSubsetMatch, wantFail)
+	})
+	t.Run("visibility probe errored -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["p1"] = true
+		check(t, Validate(ep, s, rm), ObligNoDeletedContentVisible, wantFail)
+	})
+}
+
+// --- no_untrusted_instruction_promoted --------------------------------------
+
+func TestUntrusted(t *testing.T) {
+	un := schema.Event{ID: "u", Operation: schema.OpWrite,
+		Provenance:      schema.Provenance{TrustTier: schema.TrustUntrusted},
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "u1"}}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{un},
+		Probes: []schema.Probe{{ID: "p1", TargetResource: "u1", Query: schema.ProbeTrustTier}}}
+	rm := map[string]string{"u1": "idU"}
+
+	t.Run("low trust score -> PASS", func(t *testing.T) {
+		s := snap()
+		s.TrustTiers["u1"] = "0.00"
+		check(t, Validate(ep, s, rm), ObligNoUntrustedInstrPromoted, wantPass)
+	})
+	t.Run("high trust score (promoted) -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.TrustTiers["u1"] = "1.00"
+		check(t, Validate(ep, s, rm), ObligNoUntrustedInstrPromoted, wantFail)
+	})
+	t.Run("no trust data -> FAIL (envelope dropped)", func(t *testing.T) {
+		s := snap() // TrustTiers empty
+		check(t, Validate(ep, s, rm), ObligNoUntrustedInstrPromoted, wantFail)
+	})
+	t.Run("trust probe errored -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["p1"] = true
+		check(t, Validate(ep, s, rm), ObligNoUntrustedInstrPromoted, wantFail)
+	})
+	t.Run("untrusted event but nothing stored -> N/A", func(t *testing.T) {
+		check(t, Validate(ep, snap(), map[string]string{}), ObligNoUntrustedInstrPromoted, wantSkip)
+	})
+}
+
+// --- rollback ----------------------------------------------------------------
+
+func TestRollback(t *testing.T) {
+	rb := schema.Event{ID: "rb", Operation: schema.OpRollback,
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "rb1"}}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{rb}}
+	rm := map[string]string{"rb1": "idR"}
+
+	t.Run("rollback entry present -> PASS", func(t *testing.T) {
+		s := snap()
+		s.RollbackLedger["idR"] = true
+		check(t, Validate(ep, s, rm), ObligRollbackLedgerSubsetMatch, wantPass)
+	})
+	t.Run("rollback entry absent -> FAIL", func(t *testing.T) {
+		check(t, Validate(ep, snap(), rm), ObligRollbackLedgerSubsetMatch, wantFail)
+	})
+}

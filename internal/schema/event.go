@@ -30,8 +30,8 @@ const (
 type RetentionPolicy string
 
 const (
-	RetentionDurable    RetentionPolicy = "durable"
-	RetentionEphemeral  RetentionPolicy = "ephemeral"
+	RetentionDurable     RetentionPolicy = "durable"
+	RetentionEphemeral   RetentionPolicy = "ephemeral"
 	RetentionSessionOnly RetentionPolicy = "session_only"
 )
 
@@ -39,9 +39,9 @@ const (
 type PrivacyClass string
 
 const (
-	PrivacyUser        PrivacyClass = "user"
-	PrivacyShared      PrivacyClass = "shared"
-	PrivacySystem      PrivacyClass = "system"
+	PrivacyUser         PrivacyClass = "user"
+	PrivacyShared       PrivacyClass = "shared"
+	PrivacySystem       PrivacyClass = "system"
 	PrivacyConfidential PrivacyClass = "confidential"
 )
 
@@ -121,13 +121,13 @@ type Probe struct {
 type ProbeKind string
 
 const (
-	ProbeRead              ProbeKind = "read"              // retrieve value of resource
-	ProbeList              ProbeKind = "list"              // list all resources in scope
-	ProbeDeletionLedger    ProbeKind = "deletion_ledger"   // retrieve tombstone records
-	ProbeRollbackLedger    ProbeKind = "rollback_ledger"   // retrieve rollback records
-	ProbePermissionEpoch   ProbeKind = "permission_epoch"  // current epoch for resource
-	ProbeConflicts         ProbeKind = "conflicts"         // pending conflict list
-	ProbeTrustTier         ProbeKind = "trust_tier"        // provenance/trust of resource
+	ProbeRead            ProbeKind = "read"             // retrieve value of resource
+	ProbeList            ProbeKind = "list"             // list all resources in scope
+	ProbeDeletionLedger  ProbeKind = "deletion_ledger"  // retrieve tombstone records
+	ProbeRollbackLedger  ProbeKind = "rollback_ledger"  // retrieve rollback records
+	ProbePermissionEpoch ProbeKind = "permission_epoch" // current epoch for resource
+	ProbeConflicts       ProbeKind = "conflicts"        // pending conflict list
+	ProbeTrustTier       ProbeKind = "trust_tier"       // provenance/trust of resource
 )
 
 // ProbeResponse is what the system under test returns for a probe.

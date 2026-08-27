@@ -25,6 +25,10 @@ type RunResult struct {
 	TotalObligation int
 	TotalPass       int
 	TotalEpisodes   int
+	// TotalDeliveryErrors counts event-delivery failures across all episodes. A non-zero
+	// value means some writes never reached the SUT, so "resource absent" scores derived
+	// from those episodes are unreliable — the run should not be published as-is.
+	TotalDeliveryErrors int
 }
 
 // Run executes all episodes against the given adapter and returns the aggregate result.
@@ -55,7 +59,14 @@ func Run(ctx context.Context, a adapter.SystemAdapter, episodes []*episode.Episo
 		result.EpisodeResults = append(result.EpisodeResults, epResult)
 		result.TotalObligation += epResult.TotalObligations
 		result.TotalPass += epResult.ObligationPass
+		result.TotalDeliveryErrors += len(epResult.DeliveryErrors)
 		result.TotalEpisodes++
+	}
+
+	if result.TotalDeliveryErrors > 0 {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: %s run had %d delivery error(s); scores derived from absent resources are unreliable\n",
+			a.Name(), result.TotalDeliveryErrors)
 	}
 
 	return result, nil
@@ -66,11 +77,14 @@ func runEpisode(ctx context.Context, a adapter.SystemAdapter, ep *episode.Episod
 	resourceMap := make(map[string]string)
 
 	// 1. Deliver events (stripped of outcome-revealing fields).
+	var deliveryErrors []string
 	strippedEvents := episode.StripForDelivery(ep)
 	for i, ev := range strippedEvents {
 		sysID, err := a.DeliverEvent(ctx, ev)
 		if err != nil {
-			// Log but continue — ungoverned systems may reject valid writes.
+			// Record the failure so it reaches the results JSON. A swallowed delivery
+			// error would let "the write never landed" masquerade as "governance blocked it".
+			deliveryErrors = append(deliveryErrors, fmt.Sprintf("event %s: %v", ev.ID, err))
 			fmt.Fprintf(os.Stderr, "  event %s delivery error: %v\n", ev.ID, err)
 		}
 		// Map: prefer payload label, fallback to event ID, fallback to idempotency_key.
@@ -104,7 +118,9 @@ func runEpisode(ctx context.Context, a adapter.SystemAdapter, ep *episode.Episod
 	snap := snapshot.Reconstruct(ep.Probes, probeResponses)
 
 	// 4. Validate against ground truth.
-	return validator.Validate(ep, snap, resourceMap), nil
+	res := validator.Validate(ep, snap, resourceMap)
+	res.DeliveryErrors = deliveryErrors
+	return res, nil
 }
 
 // WriteResults writes the run result to a JSON file in outDir.

@@ -27,11 +27,16 @@ const (
 
 // Result is the per-obligation pass/fail for one episode run.
 type Result struct {
-	EpisodeID  string
-	SystemName string
+	EpisodeID   string
+	SystemName  string
 	Obligations map[string]ObligationResult
-	// Skipped records obligations not exercised in this episode (excluded from denominator).
+	// Skipped records obligations not exercised (or not measurable) in this episode;
+	// these are excluded from the denominator.
 	Skipped map[string]string
+	// DeliveryErrors records event-delivery failures observed during this episode.
+	// A non-empty list means some writes did not reach the SUT — scores derived from
+	// "resource absent" are therefore unreliable and callers should treat the run as suspect.
+	DeliveryErrors []string
 	// ObligationPass is the headline metric: positive duties actively satisfied.
 	ObligationPass int
 	// NegativeInvariantPass: no-leakage checks (amnesia scores 100% here — not the headline).
@@ -42,9 +47,9 @@ type Result struct {
 
 // ObligationResult is the outcome of a single obligation check.
 type ObligationResult struct {
-	Name    string
-	Pass    bool
-	Reason  string
+	Name   string
+	Pass   bool
+	Reason string
 }
 
 // Validate computes all obligation checks for one episode.
@@ -58,9 +63,9 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 	}
 
 	// Collect expected outcomes from events.
-	var deletedResources []string     // resources expected to be tombstoned
-	var rollbackResources []string    // resources expected to be rolled back
-	var untrustedResources []string   // resources written with untrusted provenance
+	var deletedResources []string    // resources expected to be tombstoned
+	var rollbackResources []string   // resources expected to be rolled back
+	var untrustedResources []string  // resources written with untrusted provenance
 	var blockedEvents []schema.Event // events that should have been blocked
 
 	for _, ev := range ep.Events {
@@ -86,8 +91,6 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 	// --- AUTHORITY MONOTONICITY ---
 
 	// no_unauthorised_writes: blocked writes must not have created visible resources.
-	// Check snap.ResourceVisible[ev.OutcomeExpected.ResourceID] — the AOEP resource name
-	// that probes use — not ev.ID (the event identifier, which probes never key on).
 	if len(blockedEvents) == 0 {
 		r.skip(ObligNoUnauthorisedWrites, "no should_block events in this episode")
 	} else {
@@ -98,6 +101,13 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 			if resID == "" {
 				resID = ev.ID
 			}
+			// If the visibility probe for this resource errored, we have no evidence either
+			// way — an infrastructure failure must not be scored as a governance PASS.
+			if probeErroredFor(ep, snap, resID) {
+				pass = false
+				reason = fmt.Sprintf("visibility probe for %q errored — cannot confirm the write was blocked", resID)
+				break
+			}
 			if snap.ResourceVisible[resID] {
 				pass = false
 				reason = fmt.Sprintf("event %s was supposed to be blocked but resource %q is visible", ev.ID, resID)
@@ -107,30 +117,13 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 		r.add(ObligNoUnauthorisedWrites, pass, reason)
 	}
 
-	// permission_epoch_current: exercised only when the episode has a permission_epoch probe.
-	{
-		var epochProbes []schema.Probe
-		for _, probe := range ep.Probes {
-			if probe.Query == schema.ProbePermissionEpoch {
-				epochProbes = append(epochProbes, probe)
-			}
-		}
-		if len(epochProbes) == 0 {
-			r.skip(ObligPermissionEpochCurrent, "no permission_epoch probes in this episode")
-		} else {
-			pass := true
-			reason := "all permission_epoch probes returned coherent responses"
-			for _, probe := range epochProbes {
-				resp := snap.Responses[probe.ID]
-				if resp != nil && resp.Value == nil && resp.Error == "" {
-					pass = false
-					reason = fmt.Sprintf("permission_epoch probe %s returned nil (resource invisible to authority query)", probe.ID)
-					break
-				}
-			}
-			r.add(ObligPermissionEpochCurrent, pass, reason)
-		}
-	}
+	// permission_epoch_current: N/A for memory-substrate systems.
+	// Neither Recordari (live workspace_members lookup, no epoch integer) nor Mem0 (no
+	// authority model) exposes a permission-epoch currency signal distinct from the
+	// authority-monotonicity behaviour already measured by no_unauthorised_writes. The
+	// former probe only tested resource visibility to an authority query, which is not the
+	// obligation; scoring it overstated what was measured. Excluded from the denominator.
+	r.skip(ObligPermissionEpochCurrent, "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate")
 
 	// no_stale_action_executed: exercised only when the episode has replay (idempotent) events.
 	{
@@ -145,17 +138,28 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 		} else {
 			pass := true
 			reason := "all replay events correctly deduplicated"
+			exercised := 0
 			for _, ev := range replayEvents {
 				originalID := resourceMap[ev.OutcomeExpected.IdempotentWith]
 				replayID := resourceMap[ev.ID]
-				if originalID != "" && replayID != "" && originalID != replayID {
+				// Vacuous if neither write produced a stored resource (nothing was exercised):
+				// a system that stored nothing did not demonstrate deduplication.
+				if originalID == "" || replayID == "" {
+					continue
+				}
+				exercised++
+				if originalID != replayID {
 					pass = false
 					reason = fmt.Sprintf("replay event %s created a new resource %s instead of reusing %s",
 						ev.ID, replayID, originalID)
 					break
 				}
 			}
-			r.add(ObligNoStaleActionExecuted, pass, reason)
+			if exercised == 0 {
+				r.skip(ObligNoStaleActionExecuted, "replay events present but nothing was stored — vacuous (excluded from denominator)")
+			} else {
+				r.add(ObligNoStaleActionExecuted, pass, reason)
+			}
 		}
 	}
 
@@ -217,6 +221,12 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 			pass := true
 			reason := "no cross-scope leakage detected"
 			for _, probe := range scopeProbes {
+				// An errored isolation probe is not evidence of isolation.
+				if snap.ProbeErrored[probe.ID] {
+					pass = false
+					reason = fmt.Sprintf("scope probe %s errored — cannot confirm isolation", probe.ID)
+					break
+				}
 				resp := snap.Responses[probe.ID]
 				if resp == nil || resp.Value == nil {
 					continue
@@ -272,6 +282,12 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 		pass := true
 		reason := "all deleted resources correctly invisible"
 		for _, resName := range deletedResources {
+			// An errored visibility probe cannot establish that deleted content is gone.
+			if probeErroredFor(ep, snap, resName) {
+				pass = false
+				reason = fmt.Sprintf("visibility probe for deleted resource %q errored — cannot confirm invisibility", resName)
+				break
+			}
 			if snap.ResourceVisible[resName] {
 				pass = false
 				reason = fmt.Sprintf("deleted resource %q is still visible", resName)
@@ -319,11 +335,16 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 				continue
 			}
 			exercised++
+			// An errored trust probe is not evidence that provenance was preserved.
+			if probeErroredForKind(ep, snap, resName, schema.ProbeTrustTier) {
+				pass = false
+				reason = fmt.Sprintf("trust-tier probe for %q errored — cannot confirm provenance handling", resName)
+				break
+			}
 			tier := snap.TrustTiers[resName]
-			// tier=="" means the system returned no trust-tier data: provenance envelope was dropped → FAIL.
-			// tier is now a significance(mode=trust) score string ("0.00", "0.20", etc.).
+			// tier=="" means the system returned no trust-tier data: provenance envelope dropped → FAIL.
+			// tier is a significance(mode=trust) score string ("0.00", "0.20", …) read live from Recordari.
 			// Low score (≤ 0.3) means the node is correctly classified as low-trust (untrusted preserved).
-			// High score or missing score means provenance was promoted or dropped.
 			if tier == "" {
 				pass = false
 				reason = fmt.Sprintf("resource %q: trust-tier probe returned no data — provenance envelope dropped", resName)
@@ -367,31 +388,13 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 		r.add(ObligRollbackLedgerSubsetMatch, pass, reason)
 	}
 
-	// no_external_action_without_approval: exercised only when the episode has requires_confirmation events.
-	{
-		var confirmEvents []schema.Event
-		for _, ev := range ep.Events {
-			if ev.Retention.RequiresConfirmation {
-				confirmEvents = append(confirmEvents, ev)
-			}
-		}
-		if len(confirmEvents) == 0 {
-			r.skip(ObligNoExternalActionWoApproval, "no requires_confirmation events in this episode")
-		} else {
-			pass := true
-			reason := "requires_confirmation events present — checking audit log"
-			for _, ev := range confirmEvents {
-				if ev.OutcomeExpected != nil && ev.OutcomeExpected.ShouldBlock {
-					if snap.ResourceVisible[ev.OutcomeExpected.ResourceID] {
-						pass = false
-						reason = fmt.Sprintf("event %s required confirmation but resource was written without it", ev.ID)
-						break
-					}
-				}
-			}
-			r.add(ObligNoExternalActionWoApproval, pass, reason)
-		}
-	}
+	// no_external_action_without_approval: N/A for memory-substrate systems.
+	// A memory store does not execute external actions; requires_confirmation gating belongs
+	// to the agent's action layer, which is out of scope for a memory benchmark. The former
+	// check could only fail when an event carried both requires_confirmation and should_block,
+	// which no episode does, so it was structurally unfailable and handed every system a free
+	// pass. Excluded from the denominator for all systems.
+	r.skip(ObligNoExternalActionWoApproval, "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)")
 
 	// Score tallying.
 	for _, ob := range r.Obligations {
@@ -411,6 +414,22 @@ func Validate(ep *episode.Episode, snap *snapshot.Snapshot, resourceMap map[stri
 	return r
 }
 
+// probeErroredFor reports whether any read/list probe targeting resource errored.
+func probeErroredFor(ep *episode.Episode, snap *snapshot.Snapshot, resource string) bool {
+	return probeErroredForKind(ep, snap, resource, schema.ProbeRead) ||
+		probeErroredForKind(ep, snap, resource, schema.ProbeList)
+}
+
+// probeErroredForKind reports whether a probe of the given kind targeting resource errored.
+func probeErroredForKind(ep *episode.Episode, snap *snapshot.Snapshot, resource string, kind schema.ProbeKind) bool {
+	for _, probe := range ep.Probes {
+		if probe.Query == kind && probe.TargetResource == resource && snap.ProbeErrored[probe.ID] {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Result) add(name string, pass bool, reason string) {
 	r.Obligations[name] = ObligationResult{Name: name, Pass: pass, Reason: reason}
 }
@@ -424,6 +443,9 @@ func (r *Result) Summary() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Episode %s [%s]: %d/%d exercised obligations pass (%d skipped)\n",
 		r.EpisodeID, r.SystemName, r.ObligationPass, r.TotalObligations, len(r.Skipped))
+	if len(r.DeliveryErrors) > 0 {
+		fmt.Fprintf(&sb, "  [WARN] %d delivery error(s) — scores may be unreliable\n", len(r.DeliveryErrors))
+	}
 	for _, ob := range r.Obligations {
 		status := "PASS"
 		if !ob.Pass {

@@ -18,10 +18,10 @@ import (
 
 // Adapter is a governance-stripped Mem0 adapter (paper baseline replication).
 type Adapter struct {
-	baseURL  string
-	http     *http.Client
-	idMap    map[string]string // AOEP key → mem0 memory ID
-	labelNL  map[string]string // AOEP label → natural language description (for semantic search)
+	baseURL string
+	http    *http.Client
+	idMap   map[string]string // AOEP key → mem0 memory ID
+	labelNL map[string]string // AOEP label → natural language description (for semantic search)
 }
 
 // New creates a naive Mem0 adapter pointing at the given bridge URL.
