@@ -157,10 +157,8 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 
 		case schema.ProbeTrustTier:
 			if m, ok := resp.Value.(map[string]any); ok {
-				if node, ok := m["node"].(map[string]any); ok {
-					if tags, _ := node["tags"].(string); tags != "" {
-						s.TrustTiers[probe.TargetResource] = tags
-					}
+				if score, ok := m["trust_score"].(string); ok && score != "" {
+					s.TrustTiers[probe.TargetResource] = score
 				}
 			}
 

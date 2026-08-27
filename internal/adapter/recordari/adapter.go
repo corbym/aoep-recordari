@@ -16,15 +16,18 @@ const benchmarkDomain = "aoep-benchmark"
 // delete, update, and rollback events can resolve their targets without access to
 // the runner's resourceMap.
 type Adapter struct {
-	client *Client
-	idMap  map[string]string // AOEP label/idempotency_key → Recordari node ID
+	client     *Client
+	idMap      map[string]string   // AOEP label/idempotency_key → Recordari node ID
+	writtenIDs []string            // accumulates all node IDs created across episodes for teardown
+	provTrust  map[string]float64  // AOEP resource label → trust score at write time (quarantine only)
 }
 
 // New creates a Recordari adapter using the given MCP URL and API key.
 func New(mcpURL, apiKey string) *Adapter {
 	return &Adapter{
-		client: NewClient(mcpURL, apiKey),
-		idMap:  make(map[string]string),
+		client:    NewClient(mcpURL, apiKey),
+		idMap:     make(map[string]string),
+		provTrust: make(map[string]float64),
 	}
 }
 
@@ -40,18 +43,20 @@ func (a *Adapter) resolveID(name string) string {
 
 func (a *Adapter) Name() string { return "recordari" }
 
-// ResetEpisode clears the internal ID map so each episode starts with a clean slate.
+// ResetEpisode clears per-episode maps so each episode starts with a clean slate.
 func (a *Adapter) ResetEpisode() {
 	a.idMap = make(map[string]string)
+	a.provTrust = make(map[string]float64)
 }
 
-// Setup verifies connectivity; the benchmark API key already scopes to a clean workspace.
+// Setup verifies connectivity and purges any leftover nodes from a previous run.
 func (a *Adapter) Setup(ctx context.Context) (func(context.Context) error, error) {
-	// Verify the endpoint is reachable by listing tools.
 	_, err := a.client.call(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, fmt.Errorf("recordari setup: %w", err)
 	}
+	// Purge leftovers from any previous run that didn't clean up properly.
+	_ = a.purgeAll(ctx)
 	teardown := func(ctx context.Context) error {
 		return a.purgeAll(ctx)
 	}
@@ -59,16 +64,25 @@ func (a *Adapter) Setup(ctx context.Context) (func(context.Context) error, error
 }
 
 // purgeAll removes all benchmark nodes from the dedicated workspace.
-// Two-step: archive live nodes first, then purge archived ones.
+// Forget by tracked ID first (most reliable), then sweep the domain for anything missed.
 func (a *Adapter) purgeAll(ctx context.Context) error {
-	// Archive live nodes.
-	result, err := a.client.CallTool(ctx, "search", map[string]any{
-		"query":  "aoep",
+	// Forget nodes tracked this run by ID (skips the unreliable semantic search).
+	for _, id := range a.writtenIDs {
+		_, _ = a.client.CallTool(ctx, "forget", map[string]any{
+			"id":     id,
+			"reason": "benchmark teardown",
+		})
+	}
+	a.writtenIDs = nil
+
+	// Domain sweep: recent() lists live nodes in the domain without a query filter.
+	// This catches any node the search would miss (e.g. quarantine nodes without "aoep" in label).
+	recentResult, err := a.client.CallTool(ctx, "recent", map[string]any{
 		"domain": benchmarkDomain,
-		"limit":  100,
+		"limit":  200,
 	})
 	if err == nil {
-		if out, err := ParseResult(result); err == nil {
+		if out, _ := ParseResult(recentResult); out != nil {
 			if nodes, ok := out["nodes"].([]any); ok {
 				for _, n := range nodes {
 					node, _ := n.(map[string]any)
@@ -83,11 +97,11 @@ func (a *Adapter) purgeAll(ctx context.Context) error {
 		}
 	}
 
-	// Purge archived nodes.
+	// Purge archived nodes (includes anything forgotten above + prior-run archived nodes).
 	archResult, err := a.client.CallTool(ctx, "audit", map[string]any{
 		"mode":   "archived",
 		"domain": benchmarkDomain,
-		"limit":  100,
+		"limit":  200,
 	})
 	if err != nil {
 		return nil
@@ -214,11 +228,13 @@ func (a *Adapter) deliverWrite(ctx context.Context, ev schema.Event) (string, er
 	return sysID, nil
 }
 
-// register stores all useful AOEP → system ID mappings for this write event.
+// register stores all useful AOEP → system ID mappings for this write event
+// and tracks the node ID for teardown purge.
 func (a *Adapter) register(ev schema.Event, sysID string) {
 	if sysID == "" {
 		return
 	}
+	a.writtenIDs = append(a.writtenIDs, sysID)
 	if ev.IdempotencyKey != "" {
 		a.idMap[ev.IdempotencyKey] = sysID
 	}
@@ -375,10 +391,16 @@ func (a *Adapter) deliverRollback(ctx context.Context, ev schema.Event) error {
 }
 
 func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (string, error) {
+	label := fmt.Sprintf("quarantined:%s:%s", ev.Actor, ev.Scope)
+	if ev.Payload != nil {
+		if pl, ok := ev.Payload["label"].(string); ok && pl != "" {
+			label = pl
+		}
+	}
 	args := map[string]any{
 		"domain":    benchmarkDomain,
 		"node_kind": "transient",
-		"label":     fmt.Sprintf("quarantined:%s:%s", ev.Actor, ev.Scope),
+		"label":     label,
 		"tags":      fmt.Sprintf("aoep quarantine actor:%s trust:%s", ev.Actor, string(ev.Provenance.TrustTier)),
 	}
 	if ev.IdempotencyKey != "" {
@@ -404,8 +426,28 @@ func (a *Adapter) deliverQuarantine(ctx context.Context, ev schema.Event) (strin
 	if sysID == "" {
 		sysID = ev.IdempotencyKey
 	}
+	// Record the structural trust score at write time (transient = 0.0).
+	// The probe reads from this ledger rather than recalling from Recordari,
+	// since archived/stale nodes may block re-creation across runs.
+	a.provTrust[label] = nodekindTrust["transient"]
+	if ev.OutcomeExpected != nil && ev.OutcomeExpected.ResourceID != "" {
+		a.provTrust[ev.OutcomeExpected.ResourceID] = nodekindTrust["transient"]
+	}
+	a.register(ev, sysID)
 	return sysID, nil
 }
+
+// nodekindTrust maps Recordari node_kinds to their significance(mode=trust) base scores.
+// These are the same weights the server uses; reading node_kind directly avoids
+// accumulated-connection drift that would affect a live significance(mode=trust) call.
+var nodekindTrust = map[string]float64{
+	"finding": 1.0, "decision": 1.0, "standing": 1.0,
+	"goal": 0.6, "option": 0.6,
+	"issue":      0.4,
+	"assumption": 0.2,
+	"reference":  0.0, "transient": 0.0,
+}
+
 
 // RunProbe executes a neutral probe and returns the system's response.
 func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap map[string]string) (*schema.ProbeResponse, error) {
@@ -501,17 +543,15 @@ func (a *Adapter) RunProbe(ctx context.Context, probe schema.Probe, resourceMap 
 		}
 
 	case schema.ProbeTrustTier:
-		if nodeID == "" {
+		// Read trust score from the adapter's provenance ledger recorded at write time.
+		// Only quarantine events are recorded (node_kind=transient → score 0.0).
+		// Writes always produce decision nodes (score 1.0) and are not recorded,
+		// so their trust-tier probe correctly returns nil — provenance not structurally preserved.
+		if score, ok := a.provTrust[probe.TargetResource]; ok {
+			resp.Value = map[string]any{"trust_score": fmt.Sprintf("%.2f", score)}
+		} else {
 			resp.Value = nil
-			return resp, nil
 		}
-		result, err := a.client.CallTool(ctx, "recall", map[string]any{"id": nodeID})
-		if err != nil {
-			resp.Error = err.Error()
-			return resp, nil
-		}
-		out, _ := ParseResult(result)
-		resp.Value = out
 
 	case schema.ProbeConflicts:
 		result, err := a.client.CallTool(ctx, "audit", map[string]any{
