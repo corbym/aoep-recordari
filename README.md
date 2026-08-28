@@ -153,7 +153,7 @@ pattern does align with the paper.
 
 ### 1. Governed reducer (upper bound) — CI-gated
 
-The paper's §9.2 design includes a governed reducer (upper bound) as a correctness anchor: Table 18
+The paper's §9.4 pilot includes a governed reducer (upper bound) as a correctness anchor: Table 18
 row 1 is "Governed reducer" at 15/15 obligation pass. This harness restores that design in
 `internal/adapter/reducer/` — a pure in-process adapter that implements every AOEP-v0 governance
 rule (epoch gating, confirmation gate, idempotency dedup, scope isolation, conflict tracking) and
