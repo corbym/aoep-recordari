@@ -1,12 +1,14 @@
-// Package suite_test provides structural CI gate tests (Task 7).
+// Package suite_test provides structural CI gate tests.
 // These tests run entirely in-process using the reducer and nomem adapters,
 // requiring no network dependencies.
 package suite_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"aoep-recordari/internal/adapter/nomem"
@@ -134,6 +136,45 @@ func TestConfirmBlockIntersection(t *testing.T) {
 		}
 	}
 	t.Error("no event in the suite has requires_confirmation=true AND should_block=true — ep10 may be missing or malformed")
+}
+
+// TestReadmeClaimsPaperFacts guards against README drift from the verified paper facts
+// (arXiv:2606.30306). It asserts the README contains the required correction markers and
+// does not contain the retracted false claims from earlier rounds.
+func TestReadmeClaimsPaperFacts(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	readmePath := filepath.Join(filepath.Dir(thisFile), "..", "..", "README.md")
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		"seven systems",
+		"frozen Qwen2.5-7B reader",
+		"not directly comparable",
+		"Recordari is not in the paper",
+	}
+	for _, s := range required {
+		if !strings.Contains(content, s) {
+			t.Errorf("README.md missing required text: %q", s)
+		}
+	}
+
+	retracted := []string{
+		"no such reference implementation",
+		"single headline score",
+		"two systems (Recordari + Mem0)",
+	}
+	for _, s := range retracted {
+		if strings.Contains(content, s) {
+			t.Errorf("README.md contains retracted false claim: %q", s)
+		}
+	}
 }
 
 // TestProbeNeutrality: no probe's TargetResource or ID should match any obligation name.

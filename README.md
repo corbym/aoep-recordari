@@ -71,12 +71,13 @@ TOTAL neg-invariant_pass                 6/6     3/3      4/6        1/6
 
 ### What the scores mean
 
-**Paper baseline** (Table 18, §9.4): `Mem0 (actual mem0ai)` scored **3/15** obligation pass.
-`mem0paper` scores **0/9 (0%)** on the round-3 baseline (2026-08-28). All failures are genuine
-envelope-absence or vector-index failures. The paper's 3/15 is driven by envelope absence — no
-epoch, deletion ledger, or trust tier. Denominators differ: the paper uses 15 obligations across
-its episode set; this harness uses 9–12 depending on system (vacuous N/As excluded symmetrically).
-See "How this differs from the paper's pilot" below for a full accounting of the differences.
+**Paper baseline** (Table 18, §9.4): `Mem0 (actual mem0ai)` scored **3/15** obligation pass,
+through a frozen Qwen2.5-7B reader (greedy decoding). `mem0paper` scores **0/9 (0%)** on the
+round-3 direct-API baseline (2026-08-28). These numbers are **not directly comparable**: the paper
+measures store-plus-reader; this harness measures store APIs directly with no reader. Only the
+per-obligation failure pattern is comparable — and it does align: failures are genuine
+envelope-absence or vector-index failures (no epoch counter, no deletion/rollback ledger, no trust
+tier). See "How this differs from the paper's pilot" for a full accounting.
 
 **Recordari single-key (3/12 — 25%, round 3)**: Three passes: `deletion_ledger_subset_match`,
 `rollback_ledger_subset_match`, and `no_scope_leakage` ep07. Nine failures reveal the governance
@@ -113,44 +114,79 @@ no per-user ACL). Multi-key Recordari (Phase 2) addresses some gaps.
 | `no_deleted_content_visible` | **0/2 FAIL** (neg-inv) | Vector index not purged on delete (ep01, ep04) |
 | `no_untrusted_instruction_promoted` | **0/2 FAIL** (neg-inv) | Provenance envelope dropped; nil trust data |
 
-**0/9 vs paper's 3/15**: our denominator is 9 (no_stale_action_executed N/A; conflict_surfaced N/A
-ep07). The paper uses 15 obligations. Under paper-style counting the failure pattern aligns with
-Table 18: deletion residue, ledger absence, provenance absent, scope leakage. The paper's three
-Mem0 PASSes include `no_external_action_without_approval` (2/2) and `no_stale_action_executed`
-(1/1), both of which are now failable in this harness (ep10) or N/A (ep01 vacuous).
+**0/9 vs paper's 3/15 — not directly comparable**: this harness probes store APIs directly; the
+paper measures store-plus-reader (frozen Qwen2.5-7B). Denominators also differ: our denominator
+is 9 (no_stale_action_executed N/A; conflict_surfaced N/A ep07); the paper uses 15. What is
+comparable is the failure pattern: both show envelope absence (deletion residue, ledger absence,
+provenance absent, scope leakage). The paper's three Mem0 PASSes include
+`no_external_action_without_approval` (2/2) and `no_stale_action_executed` (1/1), both of which
+are now failable in this harness (ep10) or N/A (ep01 vacuous).
 
 ---
 
 ## How this differs from the paper's pilot
 
-The paper (arXiv:2606.30306 §9.4–9.6) describes a pilot evaluation with two systems (Recordari + Mem0) against 9 fault patterns. This harness implements the same protocol with several structural additions not present in the pilot:
+The paper (arXiv:2606.30306 §9.4–9.6) ran seven systems — a governed reducer (upper bound), a
+no-memory floor, three raw-storage systems (naive append, full context, vector-RAG), a Mem0-style
+reimplementation, and actual mem0ai — over nine fault patterns, all answered through a frozen
+Qwen2.5-7B reader (greedy decoding) sitting over each store. **Recordari is not in the paper.**
+This repo is an independent application of the paper's protocol to Recordari, with `mem0paper` as
+a bridge comparator to Table 18. See [PAPER_FACTS.md](PAPER_FACTS.md) for a concise crib.
 
-### 1. Governed reducer (upper bound)
+This harness independently re-derived the reducer/floor/two-score design during earlier review
+rounds and only later confirmed the paper had specified all three — which is corroboration of the
+paper's design choices, not novelty on this repo's part.
 
-`internal/adapter/reducer/` is a pure in-process adapter with no external dependency. It implements every AOEP-v0 governance rule — epoch gating, confirmation gate, idempotency dedup, scope isolation, conflict tracking — and must pass every exercised obligation. It exists to:
+### 0. No reader — store APIs are probed directly
 
-- Prove the episode suite is solvable (if the reducer fails, the episode or validator is broken, not the SUT)
-- Give CI a regression gate (TestReducerCeiling fails the build if any obligation breaks)
-- Provide a citable "governed system" score for comparison tables
+**This is the most important non-comparability point.** In the paper, each system under test is a
+store paired with a frozen Qwen2.5-7B reader: neutral probes are answered by the reader over
+whatever the store gives it, so Table 18 scores measure store-plus-reader configurations. This
+harness has no reader; probes hit each store's API directly and the validator inspects raw JSON
+responses.
 
-The paper's pilot had no such reference implementation. Scores from the paper could therefore not be distinguished from a broken harness.
+That makes this harness more deterministic (no sampling noise, no reader error) but means
+**no number here is directly comparable to a Table 18 number** — including the "0/9 vs paper's
+3/15" comparison elsewhere in this README. Only the per-obligation failure pattern (envelope
+absence: no epoch counter, no deletion/rollback ledger, no trust tier) is comparable, and that
+pattern does align with the paper.
 
-### 2. No-memory floor (lower bound)
+### 1. Governed reducer (upper bound) — CI-gated
 
-`internal/adapter/nomem/` stores nothing and returns nil for all probes. It is the governance floor: no positive obligation should be scoreable for a system with zero memory. TestFloorZero asserts `TotalPass == 0` for nomem. This catches vacuous PASS bugs — obligations that hand a free pass to an amnesiac system.
+The paper's §9.2 design includes a governed reducer (upper bound) as a correctness anchor: Table 18
+row 1 is "Governed reducer" at 15/15 obligation pass. This harness restores that design in
+`internal/adapter/reducer/` — a pure in-process adapter that implements every AOEP-v0 governance
+rule (epoch gating, confirmation gate, idempotency dedup, scope isolation, conflict tracking) and
+must pass every exercised obligation.
 
-The paper's pilot did not include a floor adapter, so vacuous passes were not detectable.
+What this repo adds beyond the paper's one-shot pilot: CI regression gates. `TestReducerCeiling`
+fails the build if any obligation breaks. The paper had no maintained artifact and therefore no
+need for this; a harness used as a living tool does.
 
-### 3. Two-score reporting (obligation_pass vs neg-invariant_pass)
+### 2. No-memory floor (lower bound) — CI-gated
 
-The paper reports a single headline score. This harness separates the 10 obligations into two pools:
+The paper's design likewise includes a no-memory floor (Table 18 row 2: 0/15 obligation pass).
+`internal/adapter/nomem/` restores that design — stores nothing, returns nil for all probes.
+`TestFloorZero` asserts `TotalPass == 0`, catching vacuous PASS bugs: obligations that hand a free
+pass to an amnesiac system.
+
+Again, what's new here is CI gating, not the floor concept itself.
+
+### 3. Two-score reporting — restored from §9.3
+
+The paper's §9.3 central design is an explicitly split scorecard: "the scorecard is deliberately
+split into two scores rather than a single number" because "a system that stores nothing trivially
+passes every negative invariant" and a pooled scalar "would reward amnesia." Table 18 reports three
+columns: Obligation | Neg.-invariant | All.
+
+Prior revisions of this harness collapsed both pools into a single total — this round restores the
+paper's two-score contract. (The paper also reports an "All" column of 92 checks, reflecting a
+richer probe set not reproduced here.)
 
 | Pool | Obligations | Denominator used for |
 |---|---|---|
 | **obligation_pass** (headline) | 7 positive duties | §9.3 headline metric |
 | **neg-invariant_pass** | `no_scope_leakage`, `no_deleted_content_visible`, `no_untrusted_instruction_promoted` | Separately reported |
-
-Negative invariants are excluded from the headline denominator because an amnesiac system trivially satisfies them (nothing stored → nothing leaks). Reporting them separately avoids inflating the headline score for systems that store nothing.
 
 ### 4. Structurally failable confirmation gate (ep10 + active check)
 
@@ -182,6 +218,14 @@ The paper's §9.3 mentions conflict surfacing as a governance property but the p
 ### 7. no_unauthorised_writes vacuousness fix
 
 A system that stores nothing trivially passes `no_unauthorised_writes` because blocked writes are invisible (they were never stored). Round 3 requires at least one non-blocked write to have been stored before the obligation is scored. This ensures nomem scores N/A (not PASS) for this obligation, keeping the floor at zero.
+
+### Scope: what this harness does not reproduce
+
+The paper's §9.5 additionally ran three realistic multi-actor episodes (tau-bench-style refund, TheAgentCompany-style scheduling, and a third), three real execution traces, and a reader-robustness sweep across 3B–8B models from three families (Table 19). This harness reproduces only the nine core fault patterns from §9.4. The multi-actor episodes and robustness sweep are not implemented here.
+
+### Spelling note
+
+The paper uses American spelling: `no_unauthorized_writes` (z). This repo uses British spelling: `no_unauthorised_writes` (s). The Go constants, episode JSON, and results files all use the British form. Anyone grepping across both this repo and the paper's supplementary material should search for both spellings. The constants are not renamed in this round — that would churn results JSON and tests for zero behavioural gain.
 
 ---
 
@@ -253,7 +297,7 @@ go run ./cmd/harness --episodes ./episodes --system all        --out ./results
 
 `reducer` is the governed in-process upper bound (must pass all exercised obligations).
 `nomem` is the no-memory floor (must pass zero positive obligations).
-`mem0paper` is the paper-baseline replication: single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier), pure semantic search. The missing governance envelope is the mechanism behind the paper's Mem0 3/15.
+`mem0paper` replicates the paper's local mem0ai configuration (§9.6): single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier), pure semantic search. The missing governance envelope is the mechanism behind the paper's Mem0 3/15. Note that the paper's 3/15 was measured through a frozen Qwen2.5-7B reader; this harness probes the store API directly — the failure pattern aligns but the numbers are not directly comparable.
 
 Results are written as timestamped JSON to `./results/`.
 
@@ -268,11 +312,12 @@ taking it as a given.
 
 > **Comparator caveat.** `mem0paper` replicates the paper's local mem0ai configuration (§9.6):
 > single shared namespace, no governance envelope — no permission epoch, deletion ledger, or trust
-> tier. The paper's Mem0 3/15 result is driven by envelope absence. The gap between Recordari and
-> `mem0paper` reflects "envelope-present vs. envelope-absent" — a configuration-level
-> demonstration, not a verdict on Mem0 as software. The paper notes an unrun required ablation:
-> add a minimal governance envelope to an extracted-fact store and rerun before drawing stronger
-> conclusions.
+> tier. The paper's Mem0 3/15 result is driven by envelope absence, measured through a frozen
+> Qwen2.5-7B reader; this harness probes store APIs directly — the failure pattern aligns but the
+> numbers are not directly comparable. The gap between Recordari and `mem0paper` reflects
+> "envelope-present vs. envelope-absent" — a configuration-level demonstration, not a verdict on
+> Mem0 as software. The paper notes an unrun required ablation: add a minimal governance envelope
+> to an extracted-fact store and rerun before drawing stronger conclusions.
 
 > **Bridge caveat.** The Mem0 FastAPI bridge (`mem0_server/`) is unauthenticated and exposes a
 > destructive `/reset_all`. It is localhost-only benchmark tooling — do not expose it on a network.
@@ -296,7 +341,7 @@ taking it as a given.
 
 **Scope-leakage detection**: Cross-actor reads are only flagged as scope leakage when the target scope is an identity namespace (`scope = "writer_name:..."`) — generic functional scopes like `session-state` or `tool-outputs` represent legitimate tool→agent data flow and are not counted.
 
-**mem0paper replication statement**: `mem0paper` replicates the paper's local mem0ai config: single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier). The paper's Mem0 3/15 result is an envelope-absence result — the LLM extraction step flattens epoch/deletion/trust into free text and loses the structured contract. Under paper-style counting (including `permission_epoch_current` and `no_external_action_without_approval`), the governance failure pattern aligns with Table 18. Our denominator uses the round-3 N/A rules. Live result: 0/9 (0%), run 2026-08-28 (round 3).
+**mem0paper replication statement**: `mem0paper` replicates the paper's local mem0ai config: single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier). The paper's Mem0 3/15 result is an envelope-absence result — the LLM extraction step flattens epoch/deletion/trust into free text and loses the structured contract. **These numbers are not directly comparable**: the paper measures store-plus-reader (frozen Qwen2.5-7B, greedy decoding); this harness probes the store API directly. The per-obligation failure pattern aligns with Table 18 (deletion residue, ledger absence, provenance absent, scope leakage). Our denominator uses the round-3 N/A rules (15 obligations in the paper; 9 here). Live result: 0/9 (0%), run 2026-08-28 (round 3).
 
 ---
 
