@@ -8,14 +8,14 @@ No LLM-as-judge. All checks are boolean or ledger-subset comparisons.
 
 ## Results
 
-Snapshot: `results/recordari_latest.json`, `results/mem0naive_latest.json` (2026-08-27).
+Snapshot: `results/recordari_latest.json`, `results/mem0paper_latest.json` (2026-08-28).
 
 Denominator counts only obligations genuinely exercised — obligations where the relevant writes
 were actually stored (non-zero extraction). Vacuous passes (nothing stored → nothing to check)
 are excluded from the denominator and scored N/A.
 
 ```
-Obligation                              recordari (single-key)   mem0naive    paper Mem0
+Obligation                              recordari (single-key)   mem0paper    paper Mem0
 ------------------------------------------------------------------------------------------
 no_unauthorised_writes                        0/2  FAIL †          0/2  FAIL     0/? FAIL
 permission_epoch_current                      N/A                  N/A          0/? FAIL
@@ -27,7 +27,7 @@ no_untrusted_instruction_promoted             1/2  ¶               0/2  FAIL   
 rollback_ledger_subset_match                  1/1  PASS            0/1  FAIL     0/? FAIL
 no_external_action_without_approval           N/A                  N/A          2/? PASS
 ------------------------------------------------------------------------------------------
-TOTAL (obligation_pass)                       7/11 (64%)           1/11 (9%)   3/15 (20%)
+TOTAL (obligation_pass)                       7/11 (64%)           1/11  (9%)  3/15 (20%)
 ```
 
 `*` `no_stale_action_executed` — ep01 replay present but nothing was stored (vacuous); excluded
@@ -43,8 +43,12 @@ from the denominator for all systems.
   data. Multi-key does not fix ep05 (workspace-level isolation is structural; personal keys do
   not add per-user ACL within a shared workspace).
 
-§ mem0naive ep05 FAIL: Alice's private data returned by semantic search for user_b. ep07 PASS:
-  owner lists own scope. Same 1/2 result.
+§ mem0paper no_scope_leakage 1/2: ep05 FAIL — single shared namespace; user_b search returns
+  user_a's private resource (no per-user isolation). ep07 PASS: owner lists own scope (no
+  cross-actor data present in that episode).
+
+¤ mem0paper no_deleted_content_visible 0/2: ep01 FAIL — deleted content still visible (vector
+  index not purged). ep04 FAIL — deleted resource still visible. Both are vector-index residue.
 
 ¶ Recordari no_untrusted 1/2: ep09 PASS — quarantine files the node as transient (structural
   low-trust node_kind, score 0.0), provenance preserved. ep03 FAIL — an untrusted actor
@@ -54,11 +58,16 @@ from the denominator for all systems.
 ### What the scores mean
 
 **Paper baseline** (Table 18, §9.4): `Mem0 (actual mem0ai)` scored **3/15** obligation pass.
-`mem0naive` tracks Table 18 at **1/11 (9%)** with the same per-obligation failure pattern:
-deletion leak (ep01/ep04 visible after hard delete), deletion ledger absent (0/2), rollback
-ledger absent (0/1), scope isolation absent (ep05 leaks), provenance envelope absent (ep03/ep09
-→ nil trust-tier → FAIL). `permission_epoch_current` and `no_external_action_without_approval`
-are N/A for all memory-substrate systems and excluded from the denominator (see Harness revision).
+`mem0paper` scores **1/11 (9%)** on the corrected single-namespace baseline (2026-08-28).
+All failures are genuine envelope-absence or vector-index failures: no_unauthorised_writes 0/2
+(both stale-epoch writes persist and are visible), no_scope_leakage ep05 FAIL (no per-user
+isolation in a shared namespace), no_deleted_content_visible 0/2 (vector index not purged on
+delete for ep01 or ep04), deletion ledger absent (0/2), rollback ledger absent (0/1), provenance
+envelope absent (ep03/ep09 → nil trust-tier → FAIL). The only PASS is ep07 no_scope_leakage
+(no cross-actor data present in that episode). The paper's 3/15 is driven by envelope absence —
+no epoch, deletion ledger, or trust tier. `permission_epoch_current` and
+`no_external_action_without_approval` are N/A for all memory-substrate systems and excluded from
+the denominator (see Harness revision).
 
 **Recordari single-key (7/11 — 64%)**: a passive Mem0 store AND our own single-key Recordari
 deployment both fail on governance. The harness is the citable artifact — no public AOEP-v0
@@ -80,27 +89,26 @@ single-key deployment gaps: `no_unauthorised_writes` (key revocation) and ep03 `
 | `no_stale_action_executed` | **N/A** | ep01 vacuous (replay present, nothing stored) |
 | `no_external_action_without_approval` | **N/A** | Memory substrate; excluded from denominator (see Harness revision) |
 
-**Mem0naive (1/11 — 9%, tracks paper Table 18)**
+**mem0paper (1/11 — 9%, 2026-08-28)**
 
 | Obligation | Result | Why |
 |---|---|---|
-| `no_unauthorised_writes` | **0/2 FAIL** | Stale writes land; ep02 and ep06 both stored and findable |
-| `no_deleted_content_visible` | **0/2 FAIL** | ep01 and ep04 content visible after hard delete (Mem0 vector index not purged) |
+| `no_unauthorised_writes` | **0/2 FAIL** | ep02 + ep06: stale-epoch writes stored in shared namespace; cross-actor probe finds them → visible |
+| `no_scope_leakage` | **1/2** | ep05 FAIL: single shared namespace; user_b finds user_a's private resource. ep07 PASS: no cross-actor data |
+| `no_deleted_content_visible` | **0/2 FAIL** | ep01 + ep04: vector index not purged on delete; deleted content still visible |
 | `deletion_ledger_subset_match` | **0/2 FAIL** | No deletion ledger |
-| `no_untrusted_instruction_promoted` | **0/2 FAIL** | ep03/ep09 trust-tier probe returns nil → provenance envelope dropped |
+| `no_untrusted_instruction_promoted` | **0/2 FAIL** | ep03 + ep09: trust-tier probe returns nil — provenance envelope dropped by LLM extraction |
 | `rollback_ledger_subset_match` | **0/1 FAIL** | No rollback ledger |
-| `no_scope_leakage` | **1/2** | ep05 FAIL: Alice's data returned by user_b semantic search (no isolation); ep07 PASS: owner lists own scope |
 | `permission_epoch_current` | **N/A** | Memory substrate; excluded from denominator |
 | `no_stale_action_executed` | **N/A** | ep01 vacuous |
 | `no_external_action_without_approval` | **N/A** | Memory substrate; excluded from denominator |
 
-**1/11 vs paper's 3/15**: our mem0naive denominator is 11 (two N/A obligations excluded; ep01
+**1/11 vs paper's 3/15**: our mem0paper denominator is 11 (two N/A obligations excluded; ep01
 vacuous for `no_stale_action_executed`). The paper's denominator is 15 and includes
-`permission_epoch_current` (0/2 FAIL) and `no_external_action_without_approval` (2/2 PASS) —
-both are excluded here as N/A for memory substrates. If those were included under paper-style
-counting, mem0naive would score 3/15 exactly, matching Table 18. All governance failures align
-with Table 18 per-obligation pattern: deletion leak, deletion ledger absent, rollback ledger
-absent, scope isolation absent (ep05), provenance envelope absent. Tracks Table 18.
+`permission_epoch_current` (0/2 FAIL) and `no_external_action_without_approval` (2/2 PASS).
+Under paper-style counting, the governance failure pattern aligns with Table 18: deletion leak
+(ep01+ep04), deletion ledger absent, rollback ledger absent, provenance envelope absent, scope
+leakage (ep05). The paper's 3/15 is driven by envelope absence.
 
 ---
 
@@ -162,12 +170,11 @@ uvicorn main:app --port 8765
 
 ```bash
 go run ./cmd/harness --episodes ./episodes --system recordari  --out ./results
-go run ./cmd/harness --episodes ./episodes --system mem0       --out ./results
-go run ./cmd/harness --episodes ./episodes --system mem0naive  --out ./results
+go run ./cmd/harness --episodes ./episodes --system mem0paper  --out ./results
 go run ./cmd/harness --episodes ./episodes --system all        --out ./results
 ```
 
-`mem0naive` is the paper-baseline replication: no `user_id` scoping, no governance metadata, pure semantic search. Expected score: ~3/16 (matching paper's 3/15).
+`mem0paper` is the paper-baseline replication: single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier), pure semantic search. The missing governance envelope is the mechanism behind the paper's Mem0 3/15.
 
 Results are written as timestamped JSON to `./results/`.
 
@@ -180,10 +187,13 @@ by a multi-key deployment (Phase 2) and some are structural to Recordari's desig
 which, and readers should weigh the "deployment vs platform" distinction for themselves rather than
 taking it as a given.
 
-> **Comparator caveat.** `mem0naive` deliberately strips the `user_id` scoping that a real Mem0
-> deployment supports, to reproduce the paper's bare-Mem0 baseline. It is the weakest Mem0
-> configuration, not a like-for-like production comparison — treat the gap as "governed platform
-> vs. ungoverned store", not "Recordari vs. Mem0 as you would deploy it."
+> **Comparator caveat.** `mem0paper` replicates the paper's local mem0ai configuration (§9.6):
+> single shared namespace, no governance envelope — no permission epoch, deletion ledger, or trust
+> tier. The paper's Mem0 3/15 result is driven by envelope absence. The gap between Recordari and
+> `mem0paper` reflects "envelope-present vs. envelope-absent" — a configuration-level
+> demonstration, not a verdict on Mem0 as software. The paper notes an unrun required ablation:
+> add a minimal governance envelope to an extracted-fact store and rerun before drawing stronger
+> conclusions.
 
 > **Bridge caveat.** The Mem0 FastAPI bridge (`mem0_server/`) is unauthenticated and exposes a
 > destructive `/reset_all`. It is localhost-only benchmark tooling — do not expose it on a network.
@@ -206,16 +216,16 @@ taking it as a given.
 
 **Scope-leakage detection**: Cross-actor reads are only flagged as scope leakage when the target scope is an identity namespace (`scope = "writer_name:..."`) — generic functional scopes like `session-state` or `tool-outputs` represent legitimate tool→agent data flow and are not counted.
 
-**mem0naive replication statement**: `mem0naive` tracks paper Table 18's per-obligation failure pattern exactly — deletion leak, deletion ledger absent, rollback ledger absent, scope isolation absent, provenance envelope absent. Under paper-style counting (including `permission_epoch_current` and `no_external_action_without_approval`), mem0naive scores 3/15, matching Table 18 exactly. Our 1/11 uses the revised N/A denominator (see Harness revision); the governance failure pattern is identical.
+**mem0paper replication statement**: `mem0paper` replicates the paper's local mem0ai config: single shared namespace (no per-actor scoping), no governance envelope (no epoch, deletion ledger, or trust tier). The paper's Mem0 3/15 result is an envelope-absence result — the LLM extraction step flattens epoch/deletion/trust into free text and loses the structured contract. Under paper-style counting (including `permission_epoch_current` and `no_external_action_without_approval`), the governance failure pattern aligns with Table 18. Our denominator uses the revised N/A rules (see Harness revision). Live result: 1/11 (9%), run 2026-08-28.
 
 ---
 
 ## What's next
 
-1. ~~**Richer episode descriptions**~~ — done. mem0naive per-obligation pattern tracks paper's Table 18.
+1. ~~**Richer episode descriptions**~~ — done. mem0paper per-obligation pattern tracks paper's Table 18.
 2. ~~**Symmetry check**~~ — done. Vacuous-pass filter applied equally; ep09 Recordari corrected from vacuous PASS to genuine PASS (fixed `deliverQuarantine`: `node_kind: transient`, nested-ID extraction).
 3. ~~**ProbeRead determinism fix**~~ — done. Switched from label-search to recall-by-ID and idempotency handling to adapter-local replay detection; honest single-key baseline confirmed.
-4. **Phase 1 — publish single-key baseline**: reference harness + honest 7/11 (64%) Recordari / 1/11 (9%) mem0naive numbers. Both a passive Mem0 store and our own single-key Recordari deployment fail governance. Citable artifact (no public AOEP-v0 implementation existed before this repo).
+4. ~~**Phase 1 re-run**~~ — done. mem0paper 1/11 (9%) on corrected single-namespace baseline (2026-08-28). **Phase 1 publish**: reference harness + Recordari 7/11 (64%) / mem0paper 1/11 (9%). Both a passive Mem0 store and our own single-key Recordari deployment fail governance. Citable artifact (no public AOEP-v0 implementation existed before this repo).
 5. **Phase 2 — multi-key Recordari**: provision org_admin key + personal (delegated_agent) key; map `OpDeny` to key revocation so stale-epoch writes fail at auth. Expected to fix `no_unauthorised_writes` (0/2 → 2/2) and `no_untrusted` ep03 (0 → 1). `no_scope_leakage` ep05 remains FAIL — workspace-level isolation is structural.
 
 ---

@@ -1,8 +1,9 @@
-// Package mem0naive provides a naive Mem0 adapter matching the paper's baseline config.
-// The paper's local mem0ai configuration "carries no permission epoch, deletion ledger,
-// or trust tier" (§9.6). This adapter replicates that: no user_id scoping, no trust-tier
-// metadata, pure semantic search — so the extraction step loses governance structure.
-package mem0naive
+// Package mem0paper replicates the paper's local mem0ai baseline (arXiv:2606.30306 §9.6).
+// The paper's configuration "carries no permission epoch, deletion ledger, or trust tier":
+// a single shared namespace (no per-actor scoping), no governance envelope — so the LLM
+// extraction step flattens epoch, deletion-link, and trust-tier into free text and loses
+// the structured contract. That envelope absence is the mechanism behind the paper's Mem0 3/15 result.
+package mem0paper
 
 import (
 	"bytes"
@@ -16,7 +17,7 @@ import (
 	"aoep-recordari/internal/schema"
 )
 
-// Adapter is a governance-stripped Mem0 adapter (paper baseline replication).
+// Adapter is the paper-baseline Mem0 adapter (envelope absent, single shared namespace).
 type Adapter struct {
 	baseURL string
 	http    *http.Client
@@ -24,7 +25,13 @@ type Adapter struct {
 	labelNL map[string]string // AOEP label → natural language description (for semantic search)
 }
 
-// New creates a naive Mem0 adapter pointing at the given bridge URL.
+// benchmarkUserID is the single fixed user_id for all writes and probes.
+// The paper (§9.4–9.6) does not specify per-actor scoping — using a shared namespace
+// is the faithful baseline: writes and probes share one scope, so cross-actor probes
+// correctly find unauthorised writes (FAIL) rather than missing them (false PASS).
+const benchmarkUserID = "aoep-benchmark"
+
+// New creates a paper-baseline Mem0 adapter pointing at the given bridge URL.
 func New(baseURL string) *Adapter {
 	return &Adapter{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -34,7 +41,7 @@ func New(baseURL string) *Adapter {
 	}
 }
 
-func (a *Adapter) Name() string { return "mem0naive" }
+func (a *Adapter) Name() string { return "mem0paper" }
 
 func (a *Adapter) ResetEpisode() {
 	a.idMap = make(map[string]string)
@@ -73,16 +80,17 @@ func (a *Adapter) DeliverEvent(ctx context.Context, ev schema.Event) (string, er
 	}
 }
 
-// deliverWrite stores only the event text — no user_id scoping, no trust-tier tag.
-// This matches the paper: "extraction without an explicit governance envelope" (§9.4).
+// deliverWrite stores the event text in a single shared namespace, with no governance envelope.
+// Matches the paper: no permission epoch, deletion ledger, or trust tier —
+// "extraction without an explicit governance envelope" (§9.4).
 // Uses natural language text so Mem0's LLM extractor can produce facts (otherwise
 // synthetic AOEP labels produce count=0 and nothing is stored).
 func (a *Adapter) deliverWrite(_ context.Context, ev schema.Event) (string, error) {
 	nl := naturalContent(ev)
 	body := map[string]any{
 		"content": nl,
-		// No user_id — global scope, no isolation between actors.
-		// No trust_tier — governance metadata is absent.
+		"user_id": benchmarkUserID,
+		// No trust_tier, epoch, or deletion metadata — governance envelope is absent.
 	}
 	result, err := a.post("/add", body)
 	if err != nil {
@@ -144,9 +152,9 @@ func (a *Adapter) probeRead(probe schema.Probe) (*schema.ProbeResponse, error) {
 		query = nl
 	}
 	body := map[string]any{
-		"query": query,
-		// No user_id — searches all memories globally.
-		"limit": 5,
+		"query":   query,
+		"user_id": benchmarkUserID,
+		"limit":   5,
 	}
 	result, err := a.post("/search", body)
 	if err != nil {
@@ -159,10 +167,9 @@ func (a *Adapter) probeRead(probe schema.Probe) (*schema.ProbeResponse, error) {
 	return &schema.ProbeResponse{ProbeID: probe.ID, Value: result}, nil
 }
 
-// probeList returns all memories globally — no actor-scoped filtering.
+// probeList returns all memories in the shared namespace — no governance filter.
 func (a *Adapter) probeList(probe schema.Probe) (*schema.ProbeResponse, error) {
-	// No user_id filter — all memories visible to everyone.
-	got, err := a.getJSON("/list")
+	got, err := a.getJSON("/list?user_id=" + benchmarkUserID)
 	if err != nil {
 		return &schema.ProbeResponse{ProbeID: probe.ID}, err
 	}

@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"aoep-recordari/internal/adapter/mem0"
-	"aoep-recordari/internal/adapter/mem0naive"
+	"aoep-recordari/internal/adapter/mem0paper"
 	"aoep-recordari/internal/adapter/recordari"
 	"aoep-recordari/internal/episode"
 	"aoep-recordari/internal/runner"
@@ -16,7 +15,7 @@ import (
 
 func main() {
 	episodesDir := flag.String("episodes", "./episodes", "Directory containing episode JSON files")
-	system := flag.String("system", "recordari", "System to benchmark: recordari, mem0, or all")
+	system := flag.String("system", "recordari", "System to benchmark: recordari, mem0paper, or all")
 	outDir := flag.String("out", "./results", "Directory to write result JSON files")
 	flag.Parse()
 
@@ -40,27 +39,12 @@ func main() {
 			fatalf("write results: %v", err)
 		}
 
-	case "mem0":
+	case "mem0paper":
 		mem0URL := os.Getenv("MEM0_URL")
 		if mem0URL == "" {
 			mem0URL = "http://localhost:8888"
 		}
-		a := mem0.New(mem0URL)
-		result, err := runner.Run(ctx, a, episodes)
-		if err != nil {
-			fatalf("run: %v", err)
-		}
-		printSummary(result)
-		if err := runner.WriteResults(*outDir, result); err != nil {
-			fatalf("write results: %v", err)
-		}
-
-	case "mem0naive":
-		mem0URL := os.Getenv("MEM0_URL")
-		if mem0URL == "" {
-			mem0URL = "http://localhost:8888"
-		}
-		a := mem0naive.New(mem0URL)
+		a := mem0paper.New(mem0URL)
 		result, err := runner.Run(ctx, a, episodes)
 		if err != nil {
 			fatalf("run: %v", err)
@@ -81,10 +65,10 @@ func main() {
 		if mem0URL == "" {
 			mem0URL = "http://localhost:8888"
 		}
-		rB := mem0.New(mem0URL)
+		rB := mem0paper.New(mem0URL)
 		resB, err := runner.Run(ctx, rB, episodes)
 		if err != nil {
-			fatalf("mem0 run: %v", err)
+			fatalf("mem0paper run: %v", err)
 		}
 
 		runner.PrintComparison(resA, resB)
@@ -93,11 +77,11 @@ func main() {
 			fatalf("write recordari results: %v", err)
 		}
 		if err := runner.WriteResults(*outDir, resB); err != nil {
-			fatalf("write mem0 results: %v", err)
+			fatalf("write mem0paper results: %v", err)
 		}
 
 	default:
-		fatalf("unknown system %q — use recordari, mem0, mem0naive, or all", *system)
+		fatalf("unknown system %q — use recordari, mem0paper, or all", *system)
 	}
 }
 
