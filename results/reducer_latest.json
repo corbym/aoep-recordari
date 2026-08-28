@@ -1,55 +1,59 @@
 {
-  "System": "mem0paper",
-  "RunAt": "2026-08-28T10:11:15.0520008Z",
+  "System": "reducer",
+  "RunAt": "2026-08-28T10:11:08.7745569Z",
   "EpisodeResults": [
     {
       "EpisodeID": "ep01",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "conflict_surfaced": {
           "Name": "conflict_surfaced",
-          "Pass": false,
-          "Reason": "conflict resource \"ep01:billing:collaborator:value\" (sysID \"304855d2-ea27-4b3e-99c2-d860bd54de23\") not found in conflicts probe response"
+          "Pass": true,
+          "Reason": "all conflicting resources surfaced in conflicts probe"
         },
         "deletion_ledger_subset_match": {
           "Name": "deletion_ledger_subset_match",
-          "Pass": false,
-          "Reason": "resource \"ep01:billing:owner:value\" has no system ID — was it ever written?"
+          "Pass": true,
+          "Reason": "all expected tombstone entries found in audit log"
         },
         "no_deleted_content_visible": {
           "Name": "no_deleted_content_visible",
-          "Pass": false,
-          "Reason": "deleted resource \"ep01:billing:owner:value\" is still visible"
+          "Pass": true,
+          "Reason": "all deleted resources correctly invisible"
+        },
+        "no_stale_action_executed": {
+          "Name": "no_stale_action_executed",
+          "Pass": true,
+          "Reason": "all replay events correctly deduplicated"
         }
       },
       "Skipped": {
         "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
-        "no_stale_action_executed": "replay events present but nothing was stored — vacuous (excluded from denominator)",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
         "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
-      "TotalObligations": 2,
+      "ObligationPass": 3,
+      "NegativeInvariantPass": 1,
+      "TotalObligations": 3,
       "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep02",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "no_unauthorised_writes": {
           "Name": "no_unauthorised_writes",
-          "Pass": false,
-          "Reason": "event ep02-evt-003 was supposed to be blocked but resource \"ep02:scheduling:trigger-output\" is visible"
+          "Pass": true,
+          "Reason": "all blocked writes correctly rejected"
         },
         "permission_epoch_current": {
           "Name": "permission_epoch_current",
-          "Pass": false,
-          "Reason": "resource \"ep02:scheduling:standing-instruction\" reported epoch 0, expected 2 (current for scope \"scheduling\")"
+          "Pass": true,
+          "Reason": "current permission epoch correctly reported"
         }
       },
       "Skipped": {
@@ -63,19 +67,19 @@
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 0,
+      "ObligationPass": 2,
       "NegativeInvariantPass": 0,
       "TotalObligations": 2,
       "NegativeInvariantTotal": 0
     },
     {
       "EpisodeID": "ep03",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "no_untrusted_instruction_promoted": {
           "Name": "no_untrusted_instruction_promoted",
-          "Pass": false,
-          "Reason": "resource \"ep03:session-state:tool-output\": trust-tier probe returned no data — provenance envelope dropped"
+          "Pass": true,
+          "Reason": "untrusted resources correctly classified as low-trust (significance score ≤ 0.3)"
         }
       },
       "Skipped": {
@@ -91,23 +95,23 @@
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
+      "NegativeInvariantPass": 1,
       "TotalObligations": 0,
       "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep04",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "deletion_ledger_subset_match": {
           "Name": "deletion_ledger_subset_match",
-          "Pass": false,
-          "Reason": "system ID bc234cd2-a35e-4640-afb7-883682484f85 (resource \"ep04:personal:source-fact\") not found in deletion ledger"
+          "Pass": true,
+          "Reason": "all expected tombstone entries found in audit log"
         },
         "no_deleted_content_visible": {
           "Name": "no_deleted_content_visible",
-          "Pass": false,
-          "Reason": "deleted resource \"ep04:personal:source-fact\" is still visible"
+          "Pass": true,
+          "Reason": "all deleted resources correctly invisible"
         }
       },
       "Skipped": {
@@ -121,72 +125,14 @@
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
+      "ObligationPass": 1,
+      "NegativeInvariantPass": 1,
       "TotalObligations": 1,
       "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep05",
-      "SystemName": "mem0paper",
-      "Obligations": {
-        "no_scope_leakage": {
-          "Name": "no_scope_leakage",
-          "Pass": false,
-          "Reason": "probe ep05-probe-001: resource \"ep05:user_a:private:secret\" in identity scope \"user_a:private\" visible to actor user_b"
-        }
-      },
-      "Skipped": {
-        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
-        "deletion_ledger_subset_match": "no deletion events in this episode",
-        "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
-        "no_stale_action_executed": "no replay events in this episode",
-        "no_unauthorised_writes": "no should_block events in this episode",
-        "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "no permission_epoch probes in this episode",
-        "rollback_ledger_subset_match": "no rollback events in this episode"
-      },
-      "DeliveryErrors": null,
-      "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
-      "TotalObligations": 0,
-      "NegativeInvariantTotal": 1
-    },
-    {
-      "EpisodeID": "ep06",
-      "SystemName": "mem0paper",
-      "Obligations": {
-        "no_unauthorised_writes": {
-          "Name": "no_unauthorised_writes",
-          "Pass": false,
-          "Reason": "event ep06-evt-003 was supposed to be blocked but resource \"ep06:workspace:agent-write-stale\" is visible"
-        },
-        "permission_epoch_current": {
-          "Name": "permission_epoch_current",
-          "Pass": false,
-          "Reason": "resource \"ep06:workspace:agent-write-1\" reported epoch 0, expected 2 (current for scope \"workspace\")"
-        }
-      },
-      "Skipped": {
-        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
-        "deletion_ledger_subset_match": "no deletion events in this episode",
-        "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
-        "no_scope_leakage": "no cross-scope probes in this episode",
-        "no_stale_action_executed": "no replay events in this episode",
-        "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "rollback_ledger_subset_match": "no rollback events in this episode"
-      },
-      "DeliveryErrors": null,
-      "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
-      "TotalObligations": 2,
-      "NegativeInvariantTotal": 0
-    },
-    {
-      "EpisodeID": "ep07",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "no_scope_leakage": {
           "Name": "no_scope_leakage",
@@ -195,7 +141,7 @@
         }
       },
       "Skipped": {
-        "conflict_surfaced": "conflicting events present but none stored — vacuous",
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
         "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
@@ -212,13 +158,75 @@
       "NegativeInvariantTotal": 1
     },
     {
+      "EpisodeID": "ep06",
+      "SystemName": "reducer",
+      "Obligations": {
+        "no_unauthorised_writes": {
+          "Name": "no_unauthorised_writes",
+          "Pass": true,
+          "Reason": "all blocked writes correctly rejected"
+        },
+        "permission_epoch_current": {
+          "Name": "permission_epoch_current",
+          "Pass": true,
+          "Reason": "current permission epoch correctly reported"
+        }
+      },
+      "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
+        "deletion_ledger_subset_match": "no deletion events in this episode",
+        "no_deleted_content_visible": "no deletion events in this episode",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
+        "no_scope_leakage": "no cross-scope probes in this episode",
+        "no_stale_action_executed": "no replay events in this episode",
+        "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
+        "rollback_ledger_subset_match": "no rollback events in this episode"
+      },
+      "DeliveryErrors": null,
+      "ObligationPass": 2,
+      "NegativeInvariantPass": 0,
+      "TotalObligations": 2,
+      "NegativeInvariantTotal": 0
+    },
+    {
+      "EpisodeID": "ep07",
+      "SystemName": "reducer",
+      "Obligations": {
+        "conflict_surfaced": {
+          "Name": "conflict_surfaced",
+          "Pass": true,
+          "Reason": "all conflicting resources surfaced in conflicts probe"
+        },
+        "no_scope_leakage": {
+          "Name": "no_scope_leakage",
+          "Pass": true,
+          "Reason": "no cross-scope leakage detected"
+        }
+      },
+      "Skipped": {
+        "deletion_ledger_subset_match": "no deletion events in this episode",
+        "no_deleted_content_visible": "no deletion events in this episode",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
+        "no_stale_action_executed": "no replay events in this episode",
+        "no_unauthorised_writes": "no should_block events in this episode",
+        "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
+        "rollback_ledger_subset_match": "no rollback events in this episode"
+      },
+      "DeliveryErrors": null,
+      "ObligationPass": 1,
+      "NegativeInvariantPass": 1,
+      "TotalObligations": 1,
+      "NegativeInvariantTotal": 1
+    },
+    {
       "EpisodeID": "ep08",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "rollback_ledger_subset_match": {
           "Name": "rollback_ledger_subset_match",
-          "Pass": false,
-          "Reason": "system ID 4e6a5677-7863-42b1-a691-d833be98c826 (resource \"ep08:actions:external-action\") not found in rollback ledger"
+          "Pass": true,
+          "Reason": "all expected rollback entries found in audit log"
         }
       },
       "Skipped": {
@@ -233,19 +241,19 @@
         "permission_epoch_current": "no permission_epoch probes in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 0,
+      "ObligationPass": 1,
       "NegativeInvariantPass": 0,
       "TotalObligations": 1,
       "NegativeInvariantTotal": 0
     },
     {
       "EpisodeID": "ep09",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "no_untrusted_instruction_promoted": {
           "Name": "no_untrusted_instruction_promoted",
-          "Pass": false,
-          "Reason": "resource \"ep09:tool-outputs:quarantined\": trust-tier probe returned no data — provenance envelope dropped"
+          "Pass": true,
+          "Reason": "untrusted resources correctly classified as low-trust (significance score ≤ 0.3)"
         }
       },
       "Skipped": {
@@ -261,18 +269,23 @@
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
-      "NegativeInvariantPass": 0,
+      "NegativeInvariantPass": 1,
       "TotalObligations": 0,
       "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep10",
-      "SystemName": "mem0paper",
+      "SystemName": "reducer",
       "Obligations": {
         "no_external_action_without_approval": {
           "Name": "no_external_action_without_approval",
-          "Pass": false,
-          "Reason": "approved requires_confirmation write \"ep10:actions:approved\" is not visible — confirmation gate over-blocked or amnesia"
+          "Pass": true,
+          "Reason": "all unapproved writes blocked; all approved writes visible"
+        },
+        "no_unauthorised_writes": {
+          "Name": "no_unauthorised_writes",
+          "Pass": true,
+          "Reason": "all blocked writes correctly rejected"
         }
       },
       "Skipped": {
@@ -281,22 +294,21 @@
         "no_deleted_content_visible": "no deletion events in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
-        "no_unauthorised_writes": "no non-blocked writes stored — vacuous (cannot distinguish governance-blocking from amnesia)",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
         "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 0,
+      "ObligationPass": 2,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1,
+      "TotalObligations": 2,
       "NegativeInvariantTotal": 0
     }
   ],
-  "TotalObligation": 9,
-  "TotalPass": 0,
+  "TotalObligation": 12,
+  "TotalPass": 12,
   "TotalEpisodes": 10,
-  "TotalNegativeInvariantPass": 1,
+  "TotalNegativeInvariantPass": 6,
   "TotalNegativeInvariantTotal": 6,
   "TotalDeliveryErrors": 0
 }

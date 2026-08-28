@@ -8,7 +8,9 @@ import (
 	"os"
 
 	"aoep-recordari/internal/adapter/mem0paper"
+	"aoep-recordari/internal/adapter/nomem"
 	"aoep-recordari/internal/adapter/recordari"
+	"aoep-recordari/internal/adapter/reducer"
 	"aoep-recordari/internal/episode"
 	"aoep-recordari/internal/runner"
 )
@@ -28,6 +30,28 @@ func main() {
 	ctx := context.Background()
 
 	switch *system {
+	case "reducer":
+		a := reducer.New()
+		result, err := runner.Run(ctx, a, episodes)
+		if err != nil {
+			fatalf("run: %v", err)
+		}
+		printSummary(result)
+		if err := runner.WriteResults(*outDir, result); err != nil {
+			fatalf("write results: %v", err)
+		}
+
+	case "nomem":
+		a := nomem.New()
+		result, err := runner.Run(ctx, a, episodes)
+		if err != nil {
+			fatalf("run: %v", err)
+		}
+		printSummary(result)
+		if err := runner.WriteResults(*outDir, result); err != nil {
+			fatalf("write results: %v", err)
+		}
+
 	case "recordari":
 		a := recordari.New(mustEnv("RECORDARI_MCP_URL"), mustEnv("RECORDARI_API_KEY"))
 		result, err := runner.Run(ctx, a, episodes)
@@ -55,6 +79,18 @@ func main() {
 		}
 
 	case "all":
+		rRed := reducer.New()
+		resRed, err := runner.Run(ctx, rRed, episodes)
+		if err != nil {
+			fatalf("reducer run: %v", err)
+		}
+
+		rNom := nomem.New()
+		resNom, err := runner.Run(ctx, rNom, episodes)
+		if err != nil {
+			fatalf("nomem run: %v", err)
+		}
+
 		rA := recordari.New(mustEnv("RECORDARI_MCP_URL"), mustEnv("RECORDARI_API_KEY"))
 		resA, err := runner.Run(ctx, rA, episodes)
 		if err != nil {
@@ -71,23 +107,24 @@ func main() {
 			fatalf("mem0paper run: %v", err)
 		}
 
-		runner.PrintComparison(resA, resB)
+		runner.PrintComparison(resRed, resNom, resA, resB)
 
-		if err := runner.WriteResults(*outDir, resA); err != nil {
-			fatalf("write recordari results: %v", err)
-		}
-		if err := runner.WriteResults(*outDir, resB); err != nil {
-			fatalf("write mem0paper results: %v", err)
+		for _, res := range []*runner.RunResult{resRed, resNom, resA, resB} {
+			if err := runner.WriteResults(*outDir, res); err != nil {
+				fatalf("write %s results: %v", res.System, err)
+			}
 		}
 
 	default:
-		fatalf("unknown system %q — use recordari, mem0paper, or all", *system)
+		fatalf("unknown system %q — use reducer, nomem, recordari, mem0paper, or all", *system)
 	}
 }
 
 func printSummary(r *runner.RunResult) {
-	fmt.Printf("\n[%s] %d episodes, %d/%d obligations pass\n\n",
-		r.System, r.TotalEpisodes, r.TotalPass, r.TotalObligation)
+	fmt.Printf("\n[%s] %d episodes — obligation_pass %d/%d, neg-invariant_pass %d/%d\n\n",
+		r.System, r.TotalEpisodes,
+		r.TotalPass, r.TotalObligation,
+		r.TotalNegativeInvariantPass, r.TotalNegativeInvariantTotal)
 	for _, ep := range r.EpisodeResults {
 		fmt.Print(ep.Summary())
 	}

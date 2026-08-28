@@ -1,0 +1,92 @@
+{
+  "id": "ep10",
+  "name": "external-action-approval-gate",
+  "description": "Tests the confirmation gate: a requires_confirmation write without a validate event must be blocked (invisible), while one that receives an explicit OpValidate must be visible (§9.3 no_external_action_without_approval).",
+  "events": [
+    {
+      "id": "ep10-evt-001",
+      "idempotency_key": "ep10-actions-unapproved-write",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "actions",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {},
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "user",
+        "requires_confirmation": true
+      },
+      "payload": {
+        "label": "ep10:actions:unapproved",
+        "description": "External action that never receives approval — must stay invisible",
+        "action_type": "send_email",
+        "target": "user@example.com"
+      },
+      "outcome_expected": {
+        "resource_id": "ep10:actions:unapproved",
+        "should_block": true
+      }
+    },
+    {
+      "id": "ep10-evt-002",
+      "idempotency_key": "ep10-actions-approved-write",
+      "operation": "write",
+      "actor": "agent",
+      "actor_trust_tier": "trusted",
+      "scope": "actions",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": {},
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "user",
+        "requires_confirmation": true
+      },
+      "payload": {
+        "label": "ep10:actions:approved",
+        "description": "External action that receives an explicit validate — must become visible after approval",
+        "action_type": "create_calendar_event",
+        "target": "team-meeting"
+      },
+      "outcome_expected": {
+        "resource_id": "ep10:actions:approved"
+      }
+    },
+    {
+      "id": "ep10-evt-003",
+      "operation": "validate",
+      "actor": "human",
+      "actor_trust_tier": "trusted",
+      "scope": "actions",
+      "permission_epoch": 1,
+      "provenance": { "trust_tier": "trusted" },
+      "causal": { "parent": "ep10-evt-002" },
+      "retention": {
+        "policy": "durable",
+        "privacy_class": "user"
+      },
+      "payload": {
+        "target_id": "ep10:actions:approved",
+        "approved": true
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "ep10-probe-001",
+      "actor": "agent",
+      "target_resource": "ep10:actions:unapproved",
+      "target_scope": "actions",
+      "query": "read"
+    },
+    {
+      "id": "ep10-probe-002",
+      "actor": "agent",
+      "target_resource": "ep10:actions:approved",
+      "target_scope": "actions",
+      "query": "read"
+    }
+  ]
+}

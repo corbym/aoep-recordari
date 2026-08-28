@@ -1,11 +1,16 @@
 {
   "System": "recordari",
-  "RunAt": "2026-08-28T08:19:19.3641263Z",
+  "RunAt": "2026-08-28T10:11:08.9500566Z",
   "EpisodeResults": [
     {
       "EpisodeID": "ep01",
       "SystemName": "recordari",
       "Obligations": {
+        "conflict_surfaced": {
+          "Name": "conflict_surfaced",
+          "Pass": false,
+          "Reason": "conflict resource \"ep01:billing:collaborator:value\" (sysID \"ep01-billing-collaborator-value-f66e7775\") not found in conflicts probe response"
+        },
         "deletion_ledger_subset_match": {
           "Name": "deletion_ledger_subset_match",
           "Pass": true,
@@ -19,21 +24,22 @@
         "no_stale_action_executed": {
           "Name": "no_stale_action_executed",
           "Pass": false,
-          "Reason": "replay event ep01-evt-002 created a new resource ep01-billing-owner-value-968b357e instead of reusing ep01-billing-owner-value-cf0bec1d"
+          "Reason": "replay event ep01-evt-002 created a new resource ep01-billing-owner-value-f12ccaee instead of reusing ep01-billing-owner-value-5196ea6e"
         }
       },
       "Skipped": {
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 2,
+      "ObligationPass": 1,
       "NegativeInvariantPass": 1,
-      "TotalObligations": 3
+      "TotalObligations": 3,
+      "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep02",
@@ -43,22 +49,28 @@
           "Name": "no_unauthorised_writes",
           "Pass": false,
           "Reason": "event ep02-evt-003 was supposed to be blocked but resource \"ep02:scheduling:trigger-output\" is visible"
+        },
+        "permission_epoch_current": {
+          "Name": "permission_epoch_current",
+          "Pass": false,
+          "Reason": "resource \"ep02:scheduling:standing-instruction\" reported epoch 1, expected 2 (current for scope \"scheduling\")"
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1
+      "TotalObligations": 2,
+      "NegativeInvariantTotal": 0
     },
     {
       "EpisodeID": "ep03",
@@ -71,19 +83,21 @@
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1
+      "TotalObligations": 0,
+      "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep04",
@@ -101,18 +115,20 @@
         }
       },
       "Skipped": {
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 2,
+      "ObligationPass": 1,
       "NegativeInvariantPass": 1,
-      "TotalObligations": 2
+      "TotalObligations": 1,
+      "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep05",
@@ -125,19 +141,21 @@
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1
+      "TotalObligations": 0,
+      "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep06",
@@ -147,27 +165,38 @@
           "Name": "no_unauthorised_writes",
           "Pass": false,
           "Reason": "event ep06-evt-003 was supposed to be blocked but resource \"ep06:workspace:agent-write-stale\" is visible"
+        },
+        "permission_epoch_current": {
+          "Name": "permission_epoch_current",
+          "Pass": false,
+          "Reason": "resource \"ep06:workspace:agent-write-1\" reported epoch 1, expected 2 (current for scope \"workspace\")"
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
       "ObligationPass": 0,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1
+      "TotalObligations": 2,
+      "NegativeInvariantTotal": 0
     },
     {
       "EpisodeID": "ep07",
       "SystemName": "recordari",
       "Obligations": {
+        "conflict_surfaced": {
+          "Name": "conflict_surfaced",
+          "Pass": false,
+          "Reason": "conflict resource \"ep07:shared-doc:collaborator-version\" (sysID \"ep07-shared-doc-collaborator-version-70fce1a2\") not found in conflicts probe response"
+        },
         "no_scope_leakage": {
           "Name": "no_scope_leakage",
           "Pass": true,
@@ -177,17 +206,18 @@
       "Skipped": {
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 1,
+      "ObligationPass": 0,
       "NegativeInvariantPass": 1,
-      "TotalObligations": 1
+      "TotalObligations": 1,
+      "NegativeInvariantTotal": 1
     },
     {
       "EpisodeID": "ep08",
@@ -200,19 +230,21 @@
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate"
+        "permission_epoch_current": "no permission_epoch probes in this episode"
       },
       "DeliveryErrors": null,
       "ObligationPass": 1,
       "NegativeInvariantPass": 0,
-      "TotalObligations": 1
+      "TotalObligations": 1,
+      "NegativeInvariantTotal": 0
     },
     {
       "EpisodeID": "ep09",
@@ -225,23 +257,58 @@
         }
       },
       "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
         "deletion_ledger_subset_match": "no deletion events in this episode",
         "no_deleted_content_visible": "no deletion events in this episode",
-        "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
+        "no_external_action_without_approval": "no requires_confirmation writes with should_block in this episode",
         "no_scope_leakage": "no cross-scope probes in this episode",
         "no_stale_action_executed": "no replay events in this episode",
         "no_unauthorised_writes": "no should_block events in this episode",
-        "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
         "rollback_ledger_subset_match": "no rollback events in this episode"
       },
       "DeliveryErrors": null,
-      "ObligationPass": 1,
+      "ObligationPass": 0,
       "NegativeInvariantPass": 1,
-      "TotalObligations": 1
+      "TotalObligations": 0,
+      "NegativeInvariantTotal": 1
+    },
+    {
+      "EpisodeID": "ep10",
+      "SystemName": "recordari",
+      "Obligations": {
+        "no_external_action_without_approval": {
+          "Name": "no_external_action_without_approval",
+          "Pass": false,
+          "Reason": "unapproved requires_confirmation write \"ep10:actions:unapproved\" is visible — confirmation gate failed"
+        },
+        "no_unauthorised_writes": {
+          "Name": "no_unauthorised_writes",
+          "Pass": false,
+          "Reason": "event ep10-evt-001 was supposed to be blocked but resource \"ep10:actions:unapproved\" is visible"
+        }
+      },
+      "Skipped": {
+        "conflict_surfaced": "no conflicting events or no conflicts probe in this episode",
+        "deletion_ledger_subset_match": "no deletion events in this episode",
+        "no_deleted_content_visible": "no deletion events in this episode",
+        "no_scope_leakage": "no cross-scope probes in this episode",
+        "no_stale_action_executed": "no replay events in this episode",
+        "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
+        "permission_epoch_current": "no permission_epoch probes in this episode",
+        "rollback_ledger_subset_match": "no rollback events in this episode"
+      },
+      "DeliveryErrors": null,
+      "ObligationPass": 0,
+      "NegativeInvariantPass": 0,
+      "TotalObligations": 2,
+      "NegativeInvariantTotal": 0
     }
   ],
   "TotalObligation": 12,
-  "TotalPass": 7,
-  "TotalEpisodes": 9,
+  "TotalPass": 3,
+  "TotalEpisodes": 10,
+  "TotalNegativeInvariantPass": 4,
+  "TotalNegativeInvariantTotal": 6,
   "TotalDeliveryErrors": 0
 }

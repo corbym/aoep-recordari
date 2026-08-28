@@ -34,12 +34,14 @@ func readProbe(id, resource string) schema.Probe {
 // snap builds a Snapshot directly from field maps (bypassing Reconstruct) for unit isolation.
 func snap() *snapshot.Snapshot {
 	return &snapshot.Snapshot{
-		Responses:       map[string]*schema.ProbeResponse{},
-		ResourceVisible: map[string]bool{},
-		ProbeErrored:    map[string]bool{},
-		DeletionLedger:  map[string]bool{},
-		RollbackLedger:  map[string]bool{},
-		TrustTiers:      map[string]string{},
+		Responses:        map[string]*schema.ProbeResponse{},
+		ResourceVisible:  map[string]bool{},
+		ProbeErrored:     map[string]bool{},
+		DeletionLedger:   map[string]bool{},
+		RollbackLedger:   map[string]bool{},
+		TrustTiers:       map[string]string{},
+		PendingConflicts: map[string]bool{},
+		ReportedEpochs:   map[string]int{},
 	}
 }
 
@@ -72,11 +74,11 @@ func check(t *testing.T, r *Result, oblig string, want wantState) {
 	}
 }
 
-// --- always-N/A obligations (the two Fable flagged) --------------------------
+// --- no_external_action_without_approval ------------------------------------
 
-func TestExternalActionAlwaysNA(t *testing.T) {
-	// Even an event carrying requires_confirmation must NOT produce a scored pass:
-	// a memory substrate does not execute external actions.
+func TestExternalActionNA(t *testing.T) {
+	// A requires_confirmation write with NO should_block → obligation is N/A
+	// (no unapproved writes with should_block means nothing to check).
 	ev := schema.Event{ID: "e1", Operation: schema.OpWrite,
 		Retention:       schema.Retention{RequiresConfirmation: true},
 		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "r1"}}
@@ -85,37 +87,167 @@ func TestExternalActionAlwaysNA(t *testing.T) {
 	check(t, r, ObligNoExternalActionWoApproval, wantSkip)
 }
 
-func TestPermissionEpochAlwaysNA(t *testing.T) {
+func TestExternalActionApprovalGate(t *testing.T) {
+	unapproved := schema.Event{
+		ID: "u", Operation: schema.OpWrite,
+		Retention:       schema.Retention{RequiresConfirmation: true},
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "r-unap", ShouldBlock: true},
+	}
+	approved := schema.Event{
+		ID: "a", Operation: schema.OpWrite,
+		Retention:       schema.Retention{RequiresConfirmation: true},
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "r-app"},
+	}
+	// A validate event targets the approved write (by label/target_id).
+	// Without this, "approved" writes are not counted (can't distinguish approval from rollback).
+	validateEv := schema.Event{
+		ID: "v", Operation: schema.OpValidate,
+		Payload: map[string]any{"target_id": "r-app"},
+	}
 	ep := &episode.Episode{ID: "t",
-		Probes: []schema.Probe{{ID: "p1", TargetResource: "r1", Query: schema.ProbePermissionEpoch}}}
+		Events: []schema.Event{unapproved, approved, validateEv},
+		Probes: []schema.Probe{
+			readProbe("p-unap", "r-unap"),
+			readProbe("p-app", "r-app"),
+		}}
+	rm := map[string]string{"a": "idA"}
+
+	t.Run("unapproved invisible + approved visible -> PASS", func(t *testing.T) {
+		s := snap()
+		s.ResourceVisible["r-app"] = true
+		check(t, Validate(ep, s, rm), ObligNoExternalActionWoApproval, wantPass)
+	})
+	t.Run("unapproved visible -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ResourceVisible["r-unap"] = true
+		s.ResourceVisible["r-app"] = true
+		check(t, Validate(ep, s, rm), ObligNoExternalActionWoApproval, wantFail)
+	})
+	t.Run("approved invisible (gate over-blocked) -> FAIL", func(t *testing.T) {
+		s := snap() // neither visible
+		check(t, Validate(ep, s, rm), ObligNoExternalActionWoApproval, wantFail)
+	})
+}
+
+// --- permission_epoch_current ------------------------------------------------
+
+func TestPermissionEpochNA(t *testing.T) {
+	// No permission_epoch probes in episode → N/A.
+	ep := &episode.Episode{ID: "t"}
 	r := Validate(ep, snap(), map[string]string{})
 	check(t, r, ObligPermissionEpochCurrent, wantSkip)
+}
+
+func TestPermissionEpochCurrent(t *testing.T) {
+	write := schema.Event{
+		ID: "w1", Operation: schema.OpWrite,
+		Scope:           "sched",
+		PermissionEpoch: 1,
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "res:sched"},
+	}
+	deny := schema.Event{
+		ID: "d1", Operation: schema.OpDeny,
+		Scope:           "sched",
+		PermissionEpoch: 2,
+	}
+	ep := &episode.Episode{ID: "t",
+		Events: []schema.Event{write, deny},
+		Probes: []schema.Probe{{ID: "p1", TargetResource: "res:sched", TargetScope: "sched", Query: schema.ProbePermissionEpoch}}}
+	rm := map[string]string{"res:sched": "id1"}
+
+	t.Run("reports current epoch 2 -> PASS", func(t *testing.T) {
+		s := snap()
+		s.ReportedEpochs["res:sched"] = 2
+		check(t, Validate(ep, s, rm), ObligPermissionEpochCurrent, wantPass)
+	})
+	t.Run("reports stale epoch 1 -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ReportedEpochs["res:sched"] = 1
+		check(t, Validate(ep, s, rm), ObligPermissionEpochCurrent, wantFail)
+	})
+	t.Run("probe errored -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["p1"] = true
+		check(t, Validate(ep, s, rm), ObligPermissionEpochCurrent, wantFail)
+	})
+	t.Run("resource never stored -> N/A (vacuous)", func(t *testing.T) {
+		check(t, Validate(ep, snap(), map[string]string{}), ObligPermissionEpochCurrent, wantSkip)
+	})
 }
 
 // --- no_unauthorised_writes --------------------------------------------------
 
 func TestUnauthorisedWrites(t *testing.T) {
+	// The check requires at least one non-blocked write to have been stored,
+	// so we can distinguish governance-blocking from amnesia.
+	other := writeBy("w0", "actor", "res:other")
 	ep := &episode.Episode{ID: "t",
-		Events: []schema.Event{blockedWrite("e1", "r1")},
+		Events: []schema.Event{other, blockedWrite("e1", "r1")},
 		Probes: []schema.Probe{readProbe("p1", "r1")}}
+	rm := map[string]string{"res:other": "idO"} // non-blocked write stored
 
 	t.Run("blocked and invisible -> PASS", func(t *testing.T) {
 		s := snap() // r1 not visible
-		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantPass)
+		check(t, Validate(ep, s, rm), ObligNoUnauthorisedWrites, wantPass)
 	})
 	t.Run("blocked but visible -> FAIL", func(t *testing.T) {
 		s := snap()
 		s.ResourceVisible["r1"] = true
-		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantFail)
+		check(t, Validate(ep, s, rm), ObligNoUnauthorisedWrites, wantFail)
 	})
 	t.Run("probe errored -> FAIL (no free pass on infra error)", func(t *testing.T) {
 		s := snap()
 		s.ProbeErrored["p1"] = true // errored read probe for r1
-		check(t, Validate(ep, s, map[string]string{}), ObligNoUnauthorisedWrites, wantFail)
+		check(t, Validate(ep, s, rm), ObligNoUnauthorisedWrites, wantFail)
 	})
 	t.Run("no blocked events -> N/A", func(t *testing.T) {
 		empty := &episode.Episode{ID: "t"}
 		check(t, Validate(empty, snap(), map[string]string{}), ObligNoUnauthorisedWrites, wantSkip)
+	})
+	t.Run("nothing else stored -> N/A (cannot distinguish blocking from amnesia)", func(t *testing.T) {
+		epJustBlocked := &episode.Episode{ID: "t",
+			Events: []schema.Event{blockedWrite("e1", "r1")},
+			Probes: []schema.Probe{readProbe("p1", "r1")}}
+		check(t, Validate(epJustBlocked, snap(), map[string]string{}), ObligNoUnauthorisedWrites, wantSkip)
+	})
+}
+
+// --- conflict_surfaced -------------------------------------------------------
+
+func TestConflictSurfaced(t *testing.T) {
+	writer := writeBy("w1", "actor", "res:orig")
+	conflicting := schema.Event{
+		ID: "c1", Operation: schema.OpWrite,
+		Causal:          schema.Causal{ConflictsWith: "idem-orig"},
+		Payload:         map[string]any{"label": "res:conflict"},
+		OutcomeExpected: &schema.ExpectedOutcome{ResourceID: "res:conflict"},
+	}
+	conflictProbe := schema.Probe{ID: "cp1", Query: schema.ProbeConflicts}
+	ep := &episode.Episode{ID: "t",
+		Events: []schema.Event{writer, conflicting},
+		Probes: []schema.Probe{conflictProbe}}
+	rm := map[string]string{"res:orig": "idO", "c1": "idC", "res:conflict": "idC"}
+
+	t.Run("conflicting resource in probe response -> PASS", func(t *testing.T) {
+		s := snap()
+		s.PendingConflicts["idC"] = true
+		check(t, Validate(ep, s, rm), ObligConflictSurfaced, wantPass)
+	})
+	t.Run("conflict not in probe response -> FAIL", func(t *testing.T) {
+		s := snap() // PendingConflicts empty
+		check(t, Validate(ep, s, rm), ObligConflictSurfaced, wantFail)
+	})
+	t.Run("conflicts probe errored -> FAIL", func(t *testing.T) {
+		s := snap()
+		s.ProbeErrored["cp1"] = true
+		check(t, Validate(ep, s, rm), ObligConflictSurfaced, wantFail)
+	})
+	t.Run("conflicting event not stored -> N/A (vacuous)", func(t *testing.T) {
+		check(t, Validate(ep, snap(), map[string]string{}), ObligConflictSurfaced, wantSkip)
+	})
+	t.Run("no conflicts probe in episode -> N/A", func(t *testing.T) {
+		epNoProbe := &episode.Episode{ID: "t", Events: []schema.Event{writer, conflicting}}
+		check(t, Validate(epNoProbe, snap(), rm), ObligConflictSurfaced, wantSkip)
 	})
 }
 

@@ -3,6 +3,7 @@ package snapshot
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"aoep-recordari/internal/schema"
@@ -97,17 +98,25 @@ type Snapshot struct {
 
 	// TrustTiers maps resource name → the trust tier the SUT reported for that resource.
 	TrustTiers map[string]string
+
+	// PendingConflicts is the set of resource IDs/labels the SUT reported as in conflict.
+	PendingConflicts map[string]bool
+
+	// ReportedEpochs maps resource name → the permission epoch the SUT reported for it.
+	ReportedEpochs map[string]int
 }
 
 // Reconstruct builds a Snapshot from a probe/response set.
 func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snapshot {
 	s := &Snapshot{
-		Responses:       make(map[string]*schema.ProbeResponse),
-		ResourceVisible: make(map[string]bool),
-		ProbeErrored:    make(map[string]bool),
-		DeletionLedger:  make(map[string]bool),
-		RollbackLedger:  make(map[string]bool),
-		TrustTiers:      make(map[string]string),
+		Responses:        make(map[string]*schema.ProbeResponse),
+		ResourceVisible:  make(map[string]bool),
+		ProbeErrored:     make(map[string]bool),
+		DeletionLedger:   make(map[string]bool),
+		RollbackLedger:   make(map[string]bool),
+		TrustTiers:       make(map[string]string),
+		PendingConflicts: make(map[string]bool),
+		ReportedEpochs:   make(map[string]int),
 	}
 
 	for _, r := range responses {
@@ -157,8 +166,44 @@ func Reconstruct(probes []schema.Probe, responses []*schema.ProbeResponse) *Snap
 					s.TrustTiers[probe.TargetResource] = score
 				}
 			}
+
+		case schema.ProbeConflicts:
+			// Collect all node IDs/labels reported as pending conflicts.
+			collectNodeIDs(resp.Value, s.PendingConflicts)
+
+		case schema.ProbePermissionEpoch:
+			// The reducer returns {"epoch": N} (float64 from JSON decode).
+			// Recordari may return a tags string like "epoch:3".
+			if m, ok := resp.Value.(map[string]any); ok {
+				if ep, ok := m["epoch"].(float64); ok {
+					s.ReportedEpochs[probe.TargetResource] = int(ep)
+				} else if epStr, ok := m["epoch"].(string); ok {
+					if n, err := strconv.Atoi(epStr); err == nil {
+						s.ReportedEpochs[probe.TargetResource] = n
+					}
+				} else if tags, ok := m["tags"].(string); ok {
+					s.ReportedEpochs[probe.TargetResource] = parseEpochFromTags(tags)
+				}
+			}
 		}
 	}
 
 	return s
+}
+
+// parseEpochFromTags extracts an epoch integer from a tags string.
+// Handles both comma-separated (reducer: "scope:X,epoch:N") and
+// space-separated (Recordari: "aoep actor:X epoch:N scope:Y") formats.
+func parseEpochFromTags(tags string) int {
+	for _, part := range strings.FieldsFunc(tags, func(r rune) bool {
+		return r == ',' || r == ' '
+	}) {
+		if after, ok := strings.CutPrefix(part, "epoch:"); ok {
+			n, err := strconv.Atoi(after)
+			if err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }

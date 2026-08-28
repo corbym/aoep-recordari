@@ -25,6 +25,10 @@ type RunResult struct {
 	TotalObligation int
 	TotalPass       int
 	TotalEpisodes   int
+	// TotalNegativeInvariantPass / TotalNegativeInvariantTotal: neg-invariant scores
+	// tracked separately from positive obligations (amnesia scores 100% here).
+	TotalNegativeInvariantPass  int
+	TotalNegativeInvariantTotal int
 	// TotalDeliveryErrors counts event-delivery failures across all episodes. A non-zero
 	// value means some writes never reached the SUT, so "resource absent" scores derived
 	// from those episodes are unreliable — the run should not be published as-is.
@@ -59,6 +63,8 @@ func Run(ctx context.Context, a adapter.SystemAdapter, episodes []*episode.Episo
 		result.EpisodeResults = append(result.EpisodeResults, epResult)
 		result.TotalObligation += epResult.TotalObligations
 		result.TotalPass += epResult.ObligationPass
+		result.TotalNegativeInvariantPass += epResult.NegativeInvariantPass
+		result.TotalNegativeInvariantTotal += epResult.NegativeInvariantTotal
 		result.TotalDeliveryErrors += len(epResult.DeliveryErrors)
 		result.TotalEpisodes++
 	}
@@ -142,37 +148,86 @@ func WriteResults(outDir string, result *RunResult) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// PrintComparison prints a side-by-side comparison table of two run results.
-func PrintComparison(a, b *RunResult) {
-	fmt.Printf("\n=== AOEP-v0 Benchmark Results (exercised episodes only) ===\n\n")
-	fmt.Printf("%-40s %12s %12s\n", "Obligation", a.System, b.System)
-	fmt.Printf("%s\n", repeatStr("-", 66))
+// PrintComparison prints a side-by-side comparison table of one or more run results.
+func PrintComparison(results ...*RunResult) {
+	if len(results) == 0 {
+		return
+	}
 
-	obligations := []string{
+	// Positive obligations (§9.3 headline metric).
+	positiveObligations := []string{
 		validator.ObligNoUnauthorisedWrites,
 		validator.ObligPermissionEpochCurrent,
 		validator.ObligNoStaleActionExecuted,
+		validator.ObligNoExternalActionWoApproval,
+		validator.ObligConflictSurfaced,
+		validator.ObligDeletionLedgerSubsetMatch,
+		validator.ObligRollbackLedgerSubsetMatch,
+	}
+	// Negative invariants (amnesia trivially passes all; NOT included in headline).
+	negativeInvariants := []string{
 		validator.ObligNoScopeLeakage,
 		validator.ObligNoDeletedContentVisible,
-		validator.ObligDeletionLedgerSubsetMatch,
 		validator.ObligNoUntrustedInstrPromoted,
-		validator.ObligRollbackLedgerSubsetMatch,
-		validator.ObligNoExternalActionWoApproval,
 	}
 
-	aByName := aggregateByObligation(a)
-	bByName := aggregateByObligation(b)
-
-	for _, name := range obligations {
-		aPass, aTotal := aByName[name][0], aByName[name][1]
-		bPass, bTotal := bByName[name][0], bByName[name][1]
-		fmt.Printf("%-40s %5d/%-5d %5d/%-5d\n", name, aPass, aTotal, bPass, bTotal)
+	byName := make([]map[string][2]int, len(results))
+	for i, r := range results {
+		byName[i] = aggregateByObligation(r)
 	}
 
-	fmt.Printf("%s\n", repeatStr("-", 66))
-	fmt.Printf("%-40s %5d/%-5d %5d/%-5d\n", "TOTAL (obligation_pass)",
-		a.TotalPass, a.TotalObligation,
-		b.TotalPass, b.TotalObligation)
+	headerFmt := "%-42s"
+	colFmt := " %11s"
+	var rb strings.Builder
+	rb.WriteString("%-42s")
+	for range results {
+		rb.WriteString(" %5d/%-5d")
+	}
+	rb.WriteString("\n")
+	rowFmt := rb.String()
+
+	width := 42 + 12*len(results)
+
+	fmt.Printf("\n=== AOEP-v0 Benchmark Results (exercised episodes only) ===\n\n")
+	fmt.Printf(headerFmt, "Obligation")
+	for _, r := range results {
+		fmt.Printf(colFmt, r.System)
+	}
+	fmt.Println()
+	fmt.Println(repeatStr("-", width))
+
+	fmt.Println("--- Positive Obligations (headline obligation_pass) ---")
+	for _, name := range positiveObligations {
+		args := []any{name}
+		for i := range results {
+			args = append(args, byName[i][name][0], byName[i][name][1])
+		}
+		fmt.Printf(rowFmt, args...)
+	}
+
+	fmt.Println(repeatStr("-", width))
+	totalArgs := []any{"TOTAL obligation_pass"}
+	for _, r := range results {
+		totalArgs = append(totalArgs, r.TotalPass, r.TotalObligation)
+	}
+	fmt.Printf(rowFmt, totalArgs...)
+
+	fmt.Println()
+	fmt.Println("--- Negative Invariants (amnesia scores 100% — NOT the headline) ---")
+	for _, name := range negativeInvariants {
+		args := []any{name}
+		for i := range results {
+			args = append(args, byName[i][name][0], byName[i][name][1])
+		}
+		fmt.Printf(rowFmt, args...)
+	}
+
+	fmt.Println(repeatStr("-", width))
+	negArgs := []any{"TOTAL neg-invariant_pass"}
+	for _, r := range results {
+		negArgs = append(negArgs, r.TotalNegativeInvariantPass, r.TotalNegativeInvariantTotal)
+	}
+	fmt.Printf(rowFmt, negArgs...)
 	fmt.Println()
 }
 
