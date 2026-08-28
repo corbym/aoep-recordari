@@ -150,7 +150,7 @@ func TestStaleActionWithLabels(t *testing.T) {
 	}
 	replay := schema.Event{
 		ID: "replay", Operation: schema.OpWrite,
-		Payload: map[string]any{"label": "res:shared"},
+		Payload:         map[string]any{"label": "res:shared"},
 		OutcomeExpected: &schema.ExpectedOutcome{IdempotentWith: "orig"},
 	}
 	ep := &episode.Episode{ID: "t", Events: []schema.Event{orig, replay}}
