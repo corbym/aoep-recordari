@@ -87,7 +87,10 @@ func runEpisode(ctx context.Context, a adapter.SystemAdapter, ep *episode.Episod
 			deliveryErrors = append(deliveryErrors, fmt.Sprintf("event %s: %v", ev.ID, err))
 			fmt.Fprintf(os.Stderr, "  event %s delivery error: %v\n", ev.ID, err)
 		}
-		// Map: prefer payload label, fallback to event ID, fallback to idempotency_key.
+		// Map by event ID (always) and by payload label when present.
+		// Both keys are needed: the stale-action check looks up ev.ID / IdempotentWith;
+		// other checks (deletion, scope) look up the resource label.
+		// When a label is absent, key == ev.ID so the second assignment is redundant but harmless.
 		key := ev.ID
 		if ev.Payload != nil {
 			if label, ok := ev.Payload["label"].(string); ok && label != "" {
@@ -95,6 +98,7 @@ func runEpisode(ctx context.Context, a adapter.SystemAdapter, ep *episode.Episod
 			}
 		}
 		if sysID != "" {
+			resourceMap[ev.ID] = sysID
 			resourceMap[key] = sysID
 		}
 		// Also map idempotency_key → sysID for idempotency checks.

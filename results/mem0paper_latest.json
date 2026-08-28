@@ -1,6 +1,6 @@
 {
   "System": "mem0paper",
-  "RunAt": "2026-08-28T07:59:19.3116778Z",
+  "RunAt": "2026-08-28T08:19:27.1584343Z",
   "EpisodeResults": [
     {
       "EpisodeID": "ep01",
@@ -88,7 +88,7 @@
         "deletion_ledger_subset_match": {
           "Name": "deletion_ledger_subset_match",
           "Pass": false,
-          "Reason": "system ID d4b856d7-94e4-466f-b463-51a2cc1c2d4c (resource \"ep04:personal:source-fact\") not found in deletion ledger"
+          "Reason": "system ID 48cb28a1-f3fb-4613-b204-e6d0beb1527d (resource \"ep04:personal:source-fact\") not found in deletion ledger"
         },
         "no_deleted_content_visible": {
           "Name": "no_deleted_content_visible",
@@ -192,7 +192,7 @@
         "rollback_ledger_subset_match": {
           "Name": "rollback_ledger_subset_match",
           "Pass": false,
-          "Reason": "system ID 58dd7ec1-4ca3-4ab7-b613-489c362dc2b0 (resource \"ep08:actions:external-action\") not found in rollback ledger"
+          "Reason": "system ID b519a68d-a8e0-423e-adf5-458f214c9e97 (resource \"ep08:actions:external-action\") not found in rollback ledger"
         }
       },
       "Skipped": {

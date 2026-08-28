@@ -16,3 +16,9 @@ Each result JSON records, per episode, the scored obligations, the N/A (skipped)
 with reasons, and any `DeliveryErrors`. A run with a non-zero `TotalDeliveryErrors` is not
 publishable — some writes never reached the system under test, so "resource absent" scores are
 unreliable.
+
+## Superseded snapshots
+
+`mem0naive_latest.json` — pre-rename artefact from before the `mem0naive → mem0paper` rename
+(2026-08-27). The adapter no longer exists; the file is retained for audit trail only. Cite
+`mem0paper_latest.json` for current results.

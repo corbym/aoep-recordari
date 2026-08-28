@@ -1,4 +1,4 @@
-mem0ai>=0.1.0
+mem0ai==2.0.13
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 chromadb>=0.5.0

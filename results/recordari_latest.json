@@ -1,6 +1,6 @@
 {
   "System": "recordari",
-  "RunAt": "2026-08-27T20:00:21.0232031Z",
+  "RunAt": "2026-08-28T08:19:19.3641263Z",
   "EpisodeResults": [
     {
       "EpisodeID": "ep01",
@@ -15,12 +15,16 @@
           "Name": "no_deleted_content_visible",
           "Pass": true,
           "Reason": "all deleted resources correctly invisible"
+        },
+        "no_stale_action_executed": {
+          "Name": "no_stale_action_executed",
+          "Pass": false,
+          "Reason": "replay event ep01-evt-002 created a new resource ep01-billing-owner-value-968b357e instead of reusing ep01-billing-owner-value-cf0bec1d"
         }
       },
       "Skipped": {
         "no_external_action_without_approval": "N/A — memory substrate does not execute external actions (obligation belongs to the agent action layer)",
         "no_scope_leakage": "no cross-scope probes in this episode",
-        "no_stale_action_executed": "replay events present but nothing was stored — vacuous (excluded from denominator)",
         "no_unauthorised_writes": "no should_block events in this episode",
         "no_untrusted_instruction_promoted": "no untrusted-provenance events in this episode",
         "permission_epoch_current": "N/A — no epoch-currency signal distinct from no_unauthorised_writes for a memory substrate",
@@ -29,7 +33,7 @@
       "DeliveryErrors": null,
       "ObligationPass": 2,
       "NegativeInvariantPass": 1,
-      "TotalObligations": 2
+      "TotalObligations": 3
     },
     {
       "EpisodeID": "ep02",
@@ -236,7 +240,7 @@
       "TotalObligations": 1
     }
   ],
-  "TotalObligation": 11,
+  "TotalObligation": 12,
   "TotalPass": 7,
   "TotalEpisodes": 9,
   "TotalDeliveryErrors": 0

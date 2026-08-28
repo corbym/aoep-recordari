@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"aoep-recordari/internal/schema"
 )
@@ -35,7 +36,7 @@ const benchmarkUserID = "aoep-benchmark"
 func New(baseURL string) *Adapter {
 	return &Adapter{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{},
+		http:    &http.Client{Timeout: 30 * time.Second},
 		idMap:   make(map[string]string),
 		labelNL: make(map[string]string),
 	}

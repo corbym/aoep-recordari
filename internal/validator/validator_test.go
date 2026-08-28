@@ -140,6 +140,38 @@ func TestStaleAction(t *testing.T) {
 	})
 }
 
+// TestStaleActionWithLabels exercises the path where replay events carry payload labels.
+// The critical invariant: the runner must key resourceMap by ev.ID (not only by label),
+// otherwise both lookups return "" and the obligation is falsely scored N/A.
+func TestStaleActionWithLabels(t *testing.T) {
+	orig := schema.Event{
+		ID: "orig", Operation: schema.OpWrite,
+		Payload: map[string]any{"label": "res:shared"},
+	}
+	replay := schema.Event{
+		ID: "replay", Operation: schema.OpWrite,
+		Payload: map[string]any{"label": "res:shared"},
+		OutcomeExpected: &schema.ExpectedOutcome{IdempotentWith: "orig"},
+	}
+	ep := &episode.Episode{ID: "t", Events: []schema.Event{orig, replay}}
+
+	t.Run("labeled: replay reused same id -> PASS", func(t *testing.T) {
+		rm := map[string]string{"orig": "idA", "replay": "idA", "res:shared": "idA"}
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantPass)
+	})
+	t.Run("labeled: replay created new id -> FAIL", func(t *testing.T) {
+		rm := map[string]string{"orig": "idA", "replay": "idB", "res:shared": "idB"}
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantFail)
+	})
+	t.Run("labeled: only label key present, no ev.ID keys -> N/A (pre-fix runner bug)", func(t *testing.T) {
+		// Runner stored only resourceMap[label] — ev.ID keys absent.
+		// Validator finds both lookups empty → vacuous N/A. This is the bug being fixed
+		// in runner.go; the test documents the old behaviour and confirms the fix is load-bearing.
+		rm := map[string]string{"res:shared": "idA"}
+		check(t, Validate(ep, snap(), rm), ObligNoStaleActionExecuted, wantSkip)
+	})
+}
+
 // --- no_scope_leakage --------------------------------------------------------
 
 func TestScopeLeakage(t *testing.T) {
